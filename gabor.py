@@ -1,9 +1,20 @@
+
 """gabor.py — fixed Gabor filter bank producing per-patch line/orientation descriptors."""
+
 import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Ordered finest -> coarsest. config.py's --gabor_num_scales slices the
+# first N entries; keep this ordering if you extend the ladder.
+BASE_SCALE_LADDER = (
+    (5, 1.5, 3.0),
+    (9, 3.0, 6.0),
+    (13, 4.5, 9.0),
+    (17, 6.0, 12.0),
+    (21, 7.5, 15.0),
+)
 
 def gabor_kernel(ksize, sigma, lambd, theta, gamma=0.5, psi=0.0):
     half = ksize // 2
@@ -23,7 +34,7 @@ def gabor_kernel(ksize, sigma, lambd, theta, gamma=0.5, psi=0.0):
 
 class GaborBank(nn.Module):
     def __init__(self, n_orient=8,
-                 scales=((9,3,6),(15,5,10),(21,7,14)),  # was:  ((5, 1.5, 3.0), (9, 3.0, 6.0), (13, 4.5, 9.0))
+                 scales=BASE_SCALE_LADDER[:3],  # was:  ((5, 1.5, 3.0), (9, 3.0, 6.0), (13, 4.5, 9.0))
                  gamma=0.5, per_channel=False):
         super().__init__()
         self.n_orient = n_orient
