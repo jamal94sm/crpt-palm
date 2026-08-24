@@ -4,6 +4,7 @@ config.py — JEPA on CASIA-MS: 3 evaluation modes.
 import argparse
 import json
 
+from gabor import BASE_SCALE_LADDER
 
 def get_cfg(args=None):
     p = argparse.ArgumentParser(description="JEPA on CASIA-MS")
@@ -92,22 +93,33 @@ def get_cfg(args=None):
     p.add_argument("--vignette_strength", type=float, default=0.05)
 
     # ─── Gabor filter bank (shared by A1 and A2) ──────────────
-    p.add_argument("--gabor_orient", type=int, default=8)
+    p.add_argument("--gabor_orient", type=int, default=8,
+        help="Number of orientations (theta = pi*o/gabor_orient).")
     p.add_argument("--gabor_gray", type=int, default=1, choices=[0, 1],
-                   help="1 = collapse to grayscale (correct for CASIA). "
-                        "0 = per-channel Gabor (RGB datasets, e.g. XJTU).")
-    p.add_argument("--gabor_scales", type=str,
-                   default='[[9,3,6],[15,5,10],[21,7,14]]',
-                   help="JSON list of [kernel_size, sigma, lambda] triples "
-                        "for the Gabor bank. Old default was "
-                        "[[9,3,6],[15,5,10],[21,7,14]] -- that version let "
-                        "filters bleed across patch boundaries; the new "
-                        "default keeps max kernel size (13) below the patch "
-                        "size (img_size/num_patches, 14px for the CASIA/XJTU "
-                        "defaults) to stay patch-local. Re-derive the cap if "
-                        "you change --img_size or --num_patches. try: [[5,1.5,3.0],[9,3.0,6.0],[13,4.5,9.0]]")
+        help="1 = collapse to grayscale (correct for CASIA). "
+             "0 = per-channel Gabor (RGB datasets, e.g. XJTU).")
+    p.add_argument("--gabor_num_scales", type=int, default=3,
+        choices=list(range(1, len(BASE_SCALE_LADDER) + 1)),
+        help=f"Number of scales drawn from BASE_SCALE_LADDER in gabor.py "
+             f"(finest -> coarsest, {len(BASE_SCALE_LADDER)} available). "
+             f"Ignored if --gabor_scales is given explicitly. Default 3 "
+             f"= {BASE_SCALE_LADDER[:3]}. NOTE: kernel sizes beyond "
+             f"~13px exceed the default patch size "
+             f"(img_size/num_patches = 14px) so filters start bleeding "
+             f"across patch boundaries -- re-check if you use "
+             f"--gabor_num_scales > 3.")
+    p.add_argument("--gabor_gamma", type=float, default=0.5,
+        help="Gaussian envelope aspect ratio for every Gabor kernel. "
+             "<1 elongates filters along the orientation axis "
+             "(more line-selective); 1.0 = circular envelope.")
+    p.add_argument("--gabor_scales", type=str, default=None,
+        help="Optional JSON list of [kernel_size, sigma, lambda] triples "
+             "that OVERRIDES --gabor_num_scales when given, e.g. "
+             f"'{json.dumps([list(s) for s in BASE_SCALE_LADDER[:3]])}'. "
+             "Leave unset to build the bank from BASE_SCALE_LADDER via "
+             "--gabor_num_scales.")
     p.add_argument("--gabor_log_every", type=int, default=5,
-                   help="Print structural/diagnostic logs every N epochs.")
+        help="Print structural/diagnostic logs every N epochs.")
 
     # ─── Legacy A1 aliases (deprecated; prefer --struct_mode) ──
     p.add_argument("--use_gabor", type=int, default=0, choices=[0, 1],
@@ -205,8 +217,12 @@ def get_cfg(args=None):
     cfg.loss_a1 = cfg.struct_loss_a1 or cfg.struct_loss
     cfg.loss_a2 = cfg.struct_loss_a2 or cfg.struct_loss
 
-    # --gabor_scales arrives as a JSON string (argparse can't take nested
-    # tuples directly) -- parse into the tuple-of-tuples GaborBank expects.
-    cfg.gabor_scales = tuple(tuple(s) for s in json.loads(cfg.gabor_scales))
+    # --gabor_scales arrives as an optional JSON string (argparse can't take
+    # nested tuples directly). Explicit value wins; otherwise slice
+    # BASE_SCALE_LADDER by --gabor_num_scales.
+    if cfg.gabor_scales is not None:
+        cfg.gabor_scales = tuple(tuple(s) for s in json.loads(cfg.gabor_scales))
+    else:
+        cfg.gabor_scales = BASE_SCALE_LADDER[:cfg.gabor_num_scales]
 
     return cfg
