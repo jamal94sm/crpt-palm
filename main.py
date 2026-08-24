@@ -169,6 +169,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
         gabor_bank = GaborBank(
             n_orient=cfg.gabor_orient,
             scales=cfg.gabor_scales,
+            gamma=cfg.gabor_gamma,
             per_channel=not bool(getattr(cfg, "gabor_gray", 1)),
         ).to(cfg.device)
         struct_head = StructureHead(
@@ -204,8 +205,10 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
         mode = "per-channel RGB" if gabor_bank.per_channel else "grayscale"
         head_mode = ("separate" if struct_head_a2 is not struct_head
                      else "shared")
-        print(f"  Gabor bank: K={gabor_bank.K} "
-              f"({cfg.gabor_orient} orient x {gabor_bank.n_scales} scales, {mode})")
+        print(f" Gabor bank: K={gabor_bank.K} "
+              f"({cfg.gabor_orient} orient x {gabor_bank.n_scales} scales, "
+              f"gamma={cfg.gabor_gamma}, {mode})")
+        print(f" Gabor scales: {cfg.gabor_scales}")
         print(f"  Structure head: {n_sh/1e6:.3f}M params  "
               f"(hidden={cfg.struct_head_hidden} -> {gabor_bank.K}, {head_mode})")
         print(f"  Struct out norm: {'ON' if cfg.norm_struct_out else 'OFF'}")
@@ -538,6 +541,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
                         "w_a1": cfg.w_a1, "w_a2": cfg.w_a2,
                         "task_weighting": cfg.task_weighting,
                         "gabor_orient": cfg.gabor_orient,
+                        "gabor_gamma": cfg.gabor_gamma,
+                        "gabor_scales": cfg.gabor_scales,
                         "gabor_K": gabor_bank.K,
                         "per_channel": gabor_bank.per_channel,
                     }
@@ -585,6 +590,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
                 "infonce_temp": float(cfg.infonce_temp),
                 "gabor_orient": int(cfg.gabor_orient),
                 "gabor_gray": int(getattr(cfg, "gabor_gray", 1)),
+                "gabor_gamma": float(cfg.gabor_gamma),
+                "gabor_scales": [list(s) for s in cfg.gabor_scales],
                 "use_supervision": int(use_sup),
                 "sup_loss": cfg.sup_loss,
                 "w_sup": float(cfg.w_sup),
