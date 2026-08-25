@@ -64,6 +64,7 @@ from corruption import corrupt_images
 from gabor import GaborBank, patch_energy_descriptor, sanity_report
 from struct_loss import structure_loss, grad_conflict_cosine
 from sup_loss import supcon_loss, build_sup_head
+from cjepa_loss import cjepa_regularizer, CJEPAProjector
 
 CASIA_MEAN = [0.5, 0.5, 0.5]                    # matches dataset.py's Normalize()
 CASIA_STD  = [0.5, 0.5, 0.5]
@@ -195,7 +196,16 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
         sup_head = build_sup_head(cfg.sup_loss, cfg.embed_dim, n_classes, cfg)
         if sup_head is not None:
             sup_head = sup_head.to(cfg.device)
-
+    
+    use_cjepa = bool(getattr(cfg, "use_cjepa_reg", False))
+    cjepa_projector = None
+    if use_cjepa:
+        if cfg.num_blocks < 2:
+            raise SystemExit("--use_cjepa_reg 1 requires --num_blocks >= 2 "
+                              "(the regularizer compares pairs of target blocks).")
+        cjepa_projector = CJEPAProjector(
+            cfg.embed_dim, out_dim=cfg.cjepa_proj_dim,
+            hidden=cfg.cjepa_proj_hidden).to(cfg.device)
     n_tasks = 1 + int(use_a1) + int(use_a2) + int(use_sup)
     if use_struct or use_sup:
         if cfg.task_weighting == "uncertainty":
@@ -223,9 +233,15 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
         print(f"  Supervision: {cfg.sup_loss}  w_sup={cfg.w_sup}  "
               f"n_classes={n_classes}  head={n_sp/1e6:.3f}M params")
 
+    if use_cjepa:
+    print(f"  C-JEPA reg: weight={cfg.cjepa_weight} "
+          f"sim={cfg.cjepa_sim_weight} std={cfg.cjepa_std_weight} "
+          f"cov={cfg.cjepa_cov_weight} blocks={cfg.num_blocks}")
+
     print(f"  Corruption: {'ON' if getattr(cfg, 'use_corruption', 0) else 'OFF'}"
-          f"   Structural: {'ON' if use_struct else 'OFF'}"
-          f"   Supervision: {'ON' if use_sup else 'OFF'}")
+          f"  Structural: {'ON' if use_struct else 'OFF'}"
+          f"  Supervision: {'ON' if use_sup else 'OFF'}"
+          f"  C-JEPA: {'ON' if use_cjepa else 'OFF'}")
 
     train_params = list(context_encoder.parameters()) + list(predictor.parameters())
     if use_struct:
@@ -234,6 +250,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
             train_params += list(struct_head_a2.parameters())
     if sup_head is not None:
         train_params += list(sup_head.parameters())
+    if cjepa_projector is not None:
+        train_params += list(cjepa_projector.parameters())
     if task_weighter is not None:
         train_params += list(task_weighter.parameters())
     opt = torch.optim.AdamW(train_params, lr=cfg.learning_rate,
@@ -265,6 +283,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
                 struct_head_a2.train()
         if sup_head is not None:
             sup_head.train()
+        if cjepa_projector is not None:
+            cjepa_projector.train()
 
         ep_loss = 0.0          # raw JEPA term only — comparable across runs
         ep_var = 0.0
@@ -273,6 +293,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
         n_a1 = n_a2 = 0
         ep_sup = ep_sup_aux = 0.0
         n_sup = 0
+        ep_cjepa = ep_cjepa_sim = ep_cjepa_std = ep_cjepa_cov = 0.0
+        n_cjepa = 0
         ep_conflict = float("nan")
         n_bat = 0
         t0 = time.time()
@@ -313,6 +335,18 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
 
             loss_jepa = F.smooth_l1_loss(pred_embeds, tgt_embeds)
 
+            l_cjepa = None
+            if use_cjepa:
+                l_cjepa, s_cjepa = cjepa_regularizer(
+                    pred_embeds, cfg.num_blocks, B, cjepa_projector,
+                    sim_weight=cfg.cjepa_sim_weight, std_weight=cfg.cjepa_std_weight,
+                    cov_weight=cfg.cjepa_cov_weight, gamma=cfg.cjepa_gamma, eps=cfg.cjepa_eps)
+                ep_cjepa += l_cjepa.item()
+                ep_cjepa_sim += s_cjepa["sim"]
+                ep_cjepa_std += s_cjepa["std"]
+                ep_cjepa_cov += s_cjepa["cov"]
+                n_cjepa += 1
+            
             l_a1 = l_a2 = None
             if use_struct:
                 with torch.no_grad():
@@ -405,12 +439,15 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
                 loss = task_weighter(terms)
             else:
                 loss = loss_jepa
-                if l_a1 is not None:
-                    loss = loss + cfg.w_a1 * l_a1
-                if l_a2 is not None:
-                    loss = loss + cfg.w_a2 * l_a2
-                if l_sup is not None:
-                    loss = loss + cfg.w_sup * l_sup
+                    if l_a1 is not None:
+                        loss = loss + cfg.w_a1 * l_a1
+                    if l_a2 is not None:
+                        loss = loss + cfg.w_a2 * l_a2
+                    if l_sup is not None:
+                        loss = loss + cfg.w_sup * l_sup
+                
+                if l_cjepa is not None:
+                    loss = loss + cfg.cjepa_weight * l_cjepa
 
             # ─── Gradient-conflict diagnostic on shared params ───
             # >0 complementary, ~0 orthogonal, <0 conflicting.
@@ -449,6 +486,10 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
         ep_a2_top1 /= max(n_a2, 1)
         ep_sup /= max(n_sup, 1)
         ep_sup_aux /= max(n_sup, 1)
+        ep_cjepa /= max(n_cjepa, 1)
+        ep_cjepa_sim /= max(n_cjepa, 1)
+        ep_cjepa_std /= max(n_cjepa, 1)
+        ep_cjepa_cov /= max(n_cjepa, 1)
         elapsed = time.time() - t0
         lr_now = scheduler.get_last_lr()[0]
 
@@ -473,6 +514,10 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
                 aux = "acc" if cfg.sup_loss in ("arcface", "ce") else "pos/anchor"
                 print(f"           SUP ({cfg.sup_loss}): loss={ep_sup:.4f}  "
                       f"{aux}={ep_sup_aux:.3f}")
+            if use_cjepa:
+                print(f"    C-JEPA: loss={ep_cjepa:.4f} sim={ep_cjepa_sim:.4f} "
+                      f"std={ep_cjepa_std:.4f} cov={ep_cjepa_cov:.4f}")
+  
             if (use_struct or use_sup) and cfg.log_conflict:
                 msg = f"           conflict_cos={ep_conflict:+.4f}"
                 if task_weighter is not None:
@@ -500,6 +545,11 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
             if use_sup:
                 eval_entry["l_sup"] = ep_sup
                 eval_entry["sup_aux"] = ep_sup_aux
+            if use_cjepa:
+                eval_entry["l_cjepa"] = ep_cjepa
+                eval_entry["cjepa_sim"] = ep_cjepa_sim
+                eval_entry["cjepa_std"] = ep_cjepa_std
+                eval_entry["cjepa_cov"] = ep_cjepa_cov
             if use_struct or use_sup:
                 eval_entry["conflict_cos"] = ep_conflict
                 if task_weighter is not None:
@@ -556,6 +606,18 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
                         "sup_loss": cfg.sup_loss,
                         "w_sup": cfg.w_sup,
                     }
+                if cjepa_projector is not None:
+                    ckpt["cjepa_projector"] = cjepa_projector.state_dict()
+                if use_cjepa:
+                    ckpt["cjepa_cfg"] = {
+                        "use_cjepa_reg": int(use_cjepa),
+                        "cjepa_weight": cfg.cjepa_weight,
+                        "cjepa_sim_weight": cfg.cjepa_sim_weight,
+                        "cjepa_std_weight": cfg.cjepa_std_weight,
+                        "cjepa_cov_weight": cfg.cjepa_cov_weight,
+                        "cjepa_proj_dim": cfg.cjepa_proj_dim,
+                    }
+                
                 torch.save(ckpt, ckpt_path)
                 print(f"    ★ New best R1={mean_r1:.2f}% "
                       f"EER={mean_eer:.2f}% → saved")
@@ -563,7 +625,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
             print(f"    Summary: Mean R1={mean_r1:.2f}% | "
                   f"Mean EER={mean_eer:.2f}%\n")
 
-    _print_history_jepa(eval_history, eval_dict, use_a1, use_a2, use_sup)
+    _print_history_jepa(eval_history, eval_dict, use_a1, use_a2, use_sup, use_cjepa)
     _print_footer(cfg, best_eval)
 
     save_path = os.path.join(cfg.output_dir,
@@ -595,14 +657,19 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
                 "use_supervision": int(use_sup),
                 "sup_loss": cfg.sup_loss,
                 "w_sup": float(cfg.w_sup),
-            },
+                "use_cjepa_reg": int(use_cjepa),
+                "cjepa_weight": float(cfg.cjepa_weight),
+                "cjepa_sim_weight": float(cfg.cjepa_sim_weight),
+                "cjepa_std_weight": float(cfg.cjepa_std_weight),
+                "cjepa_cov_weight": float(cfg.cjepa_cov_weight),
+                },
             "best": best_eval, "history": eval_history,
         }, f, indent=2)
     print(f"\n  Saved: {save_path}")
 
 
 def _print_history_jepa(eval_history, eval_dict, use_a1=False, use_a2=False,
-                         use_sup=False):
+                         use_sup=False, use_cjepa=False):
     eval_names = list(eval_dict.keys())
 
     print(f"\n  {'Epoch':>6} {'Loss':>8} {'Sim':>6}", end="")
@@ -612,6 +679,8 @@ def _print_history_jepa(eval_history, eval_dict, use_a1=False, use_a2=False,
         print(f" {'l_a2':>7} {'a2cos':>6} {'a2top1':>7}", end="")
     if use_sup:
         print(f" {'l_sup':>7} {'supaux':>7}", end="")
+    if use_cjepa:
+        print(f" {'l_cjp':>7} {'cjsim':>6} {'cjstd':>6} {'cjcov':>6}", end="")
     for name in eval_names:
         print(f" │ {name[:12]:>12} R1   EER", end="")
     print()
@@ -623,6 +692,8 @@ def _print_history_jepa(eval_history, eval_dict, use_a1=False, use_a2=False,
         print(f"{'─'*7}{'─'*6}{'─'*7}", end="")
     if use_sup:
         print(f"{'─'*7}{'─'*7}", end="")
+    if use_cjepa:
+        print(f"{'─'*7}{'─'*6}{'─'*6}{'─'*6}", end="")
     for _ in eval_names:
         print(f"─┼─{'─'*24}", end="")
     print()
@@ -641,6 +712,11 @@ def _print_history_jepa(eval_history, eval_dict, use_a1=False, use_a2=False,
         if use_sup:
             print(f" {entry.get('l_sup', float('nan')):>7.4f} "
                   f"{entry.get('sup_aux', float('nan')):>7.3f}", end="")
+        if use_cjepa:
+            print(f" {entry.get('l_cjepa', float('nan')):>7.4f} "
+                  f"{entry.get('cjepa_sim', float('nan')):>6.3f} "
+                  f"{entry.get('cjepa_std', float('nan')):>6.3f} "
+                  f"{entry.get('cjepa_cov', float('nan')):>6.3f}", end="")
         for name in eval_names:
             if name in entry:
                 r = entry[name]
