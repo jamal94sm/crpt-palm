@@ -234,9 +234,9 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
               f"n_classes={n_classes}  head={n_sp/1e6:.3f}M params")
 
     if use_cjepa:
-    print(f"  C-JEPA reg: weight={cfg.cjepa_weight} "
-          f"sim={cfg.cjepa_sim_weight} std={cfg.cjepa_std_weight} "
-          f"cov={cfg.cjepa_cov_weight} blocks={cfg.num_blocks}")
+        print(f"  C-JEPA reg: weight={cfg.cjepa_weight} "
+              f"sim={cfg.cjepa_sim_weight} std={cfg.cjepa_std_weight} "
+              f"cov={cfg.cjepa_cov_weight} blocks={cfg.num_blocks}")
 
     print(f"  Corruption: {'ON' if getattr(cfg, 'use_corruption', 0) else 'OFF'}"
           f"  Structural: {'ON' if use_struct else 'OFF'}"
