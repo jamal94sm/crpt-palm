@@ -78,7 +78,7 @@ def get_cfg(args=None):
     p.add_argument("--eval_every", type=int, default=10)
 
     # ─── Domain-shift corruption (calibrated via calibrate_domain_gap.py) ──
-    p.add_argument("--use_corruption", type=int, default=1, choices=[0, 1],
+    p.add_argument("--use_corruption", type=int, default=0, choices=[0, 1],
                    help="1 = apply domain-shift corruption to the JEPA context "
                         "view during training; 0 = standard JEPA (no corruption).")
     p.add_argument("--corruption_prob", type=float, default=0.5)
