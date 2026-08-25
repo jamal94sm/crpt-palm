@@ -439,15 +439,15 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
                 loss = task_weighter(terms)
             else:
                 loss = loss_jepa
-                    if l_a1 is not None:
-                        loss = loss + cfg.w_a1 * l_a1
-                    if l_a2 is not None:
-                        loss = loss + cfg.w_a2 * l_a2
-                    if l_sup is not None:
-                        loss = loss + cfg.w_sup * l_sup
-                
-                if l_cjepa is not None:
-                    loss = loss + cfg.cjepa_weight * l_cjepa
+                if l_a1 is not None:
+                    loss = loss + cfg.w_a1 * l_a1
+                if l_a2 is not None:
+                    loss = loss + cfg.w_a2 * l_a2
+                if l_sup is not None:
+                    loss = loss + cfg.w_sup * l_sup
+            
+            if l_cjepa is not None:
+                loss = loss + cfg.cjepa_weight * l_cjepa
 
             # ─── Gradient-conflict diagnostic on shared params ───
             # >0 complementary, ~0 orthogonal, <0 conflicting.
