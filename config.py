@@ -197,8 +197,27 @@ def get_cfg(args=None):
     p.add_argument("--arcface_scale", type=float, default=30.0)
     p.add_argument("--arcface_margin", type=float, default=0.5)
 
+    # ─── C-JEPA regularizer (Mo & Tong, NeurIPS 2024, arXiv:2410.19560) ──
+    p.add_argument("--use_cjepa_reg", type=int, default=0, choices=[0, 1],
+        help="1 = add the C-JEPA pairwise variance-invariance-covariance "
+             "regularizer across the M target-block predictions. No extra "
+             "augmented views or forward passes -- reuses the existing "
+             "predictor output. Requires --num_blocks >= 2.")
+    p.add_argument("--cjepa_weight", type=float, default=0.001,
+        help="Outer scale on the C-JEPA term (paper's beta_vicreg).")
+    p.add_argument("--cjepa_sim_weight", type=float, default=25.0,
+        help="Invariance (MSE) weight inside the C-JEPA term (beta_sim).")
+    p.add_argument("--cjepa_std_weight", type=float, default=25.0,
+        help="Variance/anti-collapse weight inside the C-JEPA term (beta_std).")
+    p.add_argument("--cjepa_cov_weight", type=float, default=1.0,
+        help="Covariance/decorrelation weight inside the C-JEPA term (beta_cov).")
+    p.add_argument("--cjepa_gamma", type=float, default=1.0)
+    p.add_argument("--cjepa_eps", type=float, default=1e-4)
+    p.add_argument("--cjepa_proj_dim", type=int, default=None,
+        help="C-JEPA projector output dim. Defaults to --embed_dim.")
+    p.add_argument("--cjepa_proj_hidden", type=int, default=None,
+        help="C-JEPA projector hidden dim. Defaults to --embed_dim.")
 
-    
     # ─── Misc ─────────────────────────────────────────────────
     p.add_argument("--seed", type=int, default=2025)
     p.add_argument("--device", default="cuda")
