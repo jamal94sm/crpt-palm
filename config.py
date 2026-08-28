@@ -218,6 +218,20 @@ def get_cfg(args=None):
     p.add_argument("--cjepa_proj_hidden", type=int, default=None,
         help="C-JEPA projector hidden dim. Defaults to --embed_dim.")
 
+    # ─── Multi-seed CI aggregation ─────────────────────────────
+    p.add_argument("--use_CI", type=int, default=0, choices=[0, 1],
+        help="1 = run this exact config --n_runs times (seed, seed+1, ..., "
+             "seed+n_runs-1), then compute mean/std and a t-based CI for "
+             "every metric (per-split rank1/eer, mean_rank1, mean_eer) "
+             "across runs. Works for any --method/--data_dir/--mode. "
+             "0 = normal single run (default, unchanged behavior).")
+    p.add_argument("--n_runs", type=int, default=3,
+        help="Number of seeds to run when --use_CI 1. At n_runs < 10, "
+             "prefer reporting mean +/- std over the CI (see the warning "
+             "printed at runtime).")
+    p.add_argument("--ci_level", type=float, default=0.95,
+        help="Confidence level for the t-based interval, e.g. 0.95 = 95%%.")
+    
     # ─── Misc ─────────────────────────────────────────────────
     p.add_argument("--seed", type=int, default=2025)
     p.add_argument("--device", default="cuda")
