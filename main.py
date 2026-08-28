@@ -65,6 +65,7 @@ from gabor import GaborBank, patch_energy_descriptor, sanity_report
 from struct_loss import structure_loss, grad_conflict_cosine
 from sup_loss import supcon_loss, build_sup_head
 from cjepa_loss import cjepa_regularizer, CJEPAProjector
+from ci_utils import run_multi_seed
 
 CASIA_MEAN = [0.5, 0.5, 0.5]                    # matches dataset.py's Normalize()
 CASIA_STD  = [0.5, 0.5, 0.5]
@@ -1013,6 +1014,12 @@ def main():
     print(f"  Mode: {cfg.mode}   embed_dim={cfg.embed_dim}   "
           f"epochs={cfg.epochs}   aug={cfg.aug_multiplier}×")
     print(f"{'='*80}\n")
+
+    if bool(getattr(cfg, "use_CI", 0)):
+        train_fns = {"jepa": train_jepa, "compnet": train_compnet,
+                     "vit_sup": train_vit_sup}
+        run_multi_seed(cfg, train_fns)
+        return
 
     train_loader, eval_dict, id_map, n_train_ids, train_id_map = build_datasets(cfg)
 
