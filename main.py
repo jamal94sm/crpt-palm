@@ -54,7 +54,7 @@ import torch
 import torch.nn.functional as F
 
 from config import get_cfg
-from dataset import build_datasets
+from dataset import build_datasets, build_cross_dataset_eval_dict
 from models import (ContextEncoder, TargetEncoder, Predictor,
                     FeatureExtractor, patchify, apply_masks,
                     repeat_interleave_batch, update_ema, CompNet, PlainViT,
@@ -628,15 +628,42 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                   f"Mean EER={mean_eer:.2f}%\n")
 
     
+    context_encoder.eval()
+    cross_dataset_results = {}
+    if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
+        print(f"\n  ── Cross-dataset evaluation (final epoch only) ──")
+        cross_eval_dict = build_cross_dataset_eval_dict(cfg)
+        if cross_eval_dict:
+            cross_dataset_results = run_full_eval(
+                feature_extractor, cross_eval_dict, cfg, tag="[cross-dataset] ")
+            for name, r in cross_dataset_results.items():
+                d = cross_eval_dict[name]
+                print(f"      {name}: R1={r['rank1']:.2f}% | EER={r['eer']:.2f}% "
+                      f"| Gal={d['n_gallery']} Prb={d['n_probe']}")
+        print()
+
     table_text = capture_print(
         _print_history_jepa, eval_history, eval_dict,
         use_a1, use_a2, use_sup, use_cjepa)
+
+    def _print_cross_dataset():
+        if not cross_dataset_results:
+            print("  (cross-dataset evaluation not run -- "
+                  "--use_cross_dataset_eval 0 or no dataset dirs configured)")
+            return
+        print(f"  {'dataset':<16} {'R1':>8} {'EER':>8}")
+        for name, r in cross_dataset_results.items():
+            print(f"  {name:<16} {r['rank1']:>8.2f} {r['eer']:>8.2f}")
+
+    cross_text = capture_print(_print_cross_dataset)
     _print_footer(cfg, best_eval)
 
     write_config_block(out_path, cfg, header=f"RUN CONFIG (seed={cfg.seed})")
     append_text(out_path, f"\nRESULTS -- method=jepa mode={cfg.mode} "
                            f"seed={cfg.seed} (LAST epoch = {eval_history[-1]['epoch']})\n"
                            f"{table_text}\n")
+    append_text(out_path, f"\nCROSS-DATASET EVALUATION (final epoch only, "
+                           f"trained on {cfg.data_dir})\n{cross_text}\n")
     print(f"\n  Saved: {out_path}")
 
     return eval_history[-1] if eval_history else None
@@ -784,13 +811,40 @@ def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
             print(f"    Summary: Mean R1={mean_r1:.2f}% | "
                   f"Mean EER={mean_eer:.2f}%\n")
 
+    model.eval()
+    cross_dataset_results = {}
+    if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
+        print(f"\n  ── Cross-dataset evaluation (final epoch only) ──")
+        cross_eval_dict = build_cross_dataset_eval_dict(cfg)
+        if cross_eval_dict:
+            cross_dataset_results = run_full_eval(
+                feature_extractor, cross_eval_dict, cfg, tag="[cross-dataset] ")
+            for name, r in cross_dataset_results.items():
+                d = cross_eval_dict[name]
+                print(f"      {name}: R1={r['rank1']:.2f}% | EER={r['eer']:.2f}% "
+                      f"| Gal={d['n_gallery']} Prb={d['n_probe']}")
+        print()
+
     table_text = capture_print(_print_history_compnet, eval_history, eval_dict)
+
+    def _print_cross_dataset():
+        if not cross_dataset_results:
+            print("  (cross-dataset evaluation not run -- "
+                  "--use_cross_dataset_eval 0 or no dataset dirs configured)")
+            return
+        print(f"  {'dataset':<16} {'R1':>8} {'EER':>8}")
+        for name, r in cross_dataset_results.items():
+            print(f"  {name:<16} {r['rank1']:>8.2f} {r['eer']:>8.2f}")
+
+    cross_text = capture_print(_print_cross_dataset)
     _print_footer(cfg, best_eval)
 
     write_config_block(out_path, cfg, header=f"RUN CONFIG (seed={cfg.seed})")
     append_text(out_path, f"\nRESULTS -- method=compnet mode={cfg.mode} "
                            f"seed={cfg.seed} (LAST epoch = {eval_history[-1]['epoch']})\n"
                            f"{table_text}\n")
+    append_text(out_path, f"\nCROSS-DATASET EVALUATION (final epoch only, "
+                           f"trained on {cfg.data_dir})\n{cross_text}\n")
     print(f"\n  Saved: {out_path}")
 
     return eval_history[-1] if eval_history else None
@@ -882,13 +936,40 @@ def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
             print(f"    Summary: Mean R1={mean_r1:.2f}% | "
                   f"Mean EER={mean_eer:.2f}%\n")
 
+    model.eval()
+    cross_dataset_results = {}
+    if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
+        print(f"\n  ── Cross-dataset evaluation (final epoch only) ──")
+        cross_eval_dict = build_cross_dataset_eval_dict(cfg)
+        if cross_eval_dict:
+            cross_dataset_results = run_full_eval(
+                feature_extractor, cross_eval_dict, cfg, tag="[cross-dataset] ")
+            for name, r in cross_dataset_results.items():
+                d = cross_eval_dict[name]
+                print(f"      {name}: R1={r['rank1']:.2f}% | EER={r['eer']:.2f}% "
+                      f"| Gal={d['n_gallery']} Prb={d['n_probe']}")
+        print()
+
     table_text = capture_print(_print_history_compnet, eval_history, eval_dict)
+
+    def _print_cross_dataset():
+        if not cross_dataset_results:
+            print("  (cross-dataset evaluation not run -- "
+                  "--use_cross_dataset_eval 0 or no dataset dirs configured)")
+            return
+        print(f"  {'dataset':<16} {'R1':>8} {'EER':>8}")
+        for name, r in cross_dataset_results.items():
+            print(f"  {name:<16} {r['rank1']:>8.2f} {r['eer']:>8.2f}")
+
+    cross_text = capture_print(_print_cross_dataset)
     _print_footer(cfg, best_eval)
 
     write_config_block(out_path, cfg, header=f"RUN CONFIG (seed={cfg.seed})")
     append_text(out_path, f"\nRESULTS -- method=vit_sup mode={cfg.mode} "
                            f"seed={cfg.seed} (LAST epoch = {eval_history[-1]['epoch']})\n"
                            f"{table_text}\n")
+    append_text(out_path, f"\nCROSS-DATASET EVALUATION (final epoch only, "
+                           f"trained on {cfg.data_dir})\n{cross_text}\n")
     print(f"\n  Saved: {out_path}")
 
     return eval_history[-1] if eval_history else None
