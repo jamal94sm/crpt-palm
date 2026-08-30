@@ -283,6 +283,25 @@ def get_cfg(args=None):
     p.add_argument("--combined_output_name", type=str, default=None,
         help="Filename (in --output_dir) for the combined comparison "
              "table. Defaults to 'ALL_BASELINES.txt'.")
+
+    # ─── Cross-dataset evaluation (one-time, after training) ───
+    p.add_argument("--use_cross_dataset_eval", type=int, default=0, choices=[0, 1],
+        help="1 = after training completes (final epoch only -- NOT every "
+             "--eval_every epochs), additionally evaluate Rank-1/EER on "
+             "the OTHER two datasets not used for training (auto-detected "
+             "from --data_dir). Uses the same --gallery_ratio/--seed as "
+             "in-domain eval. Requires the relevant --casia_dir/--xjtu_dir/"
+             "--xpalm_dir to be set for whichever datasets weren't trained on.")
+    p.add_argument("--casia_dir", type=str, default=None,
+        help="CASIA-MS root, for cross-dataset eval when it is NOT the "
+             "training set. Unused if --data_dir is already CASIA-MS.")
+    p.add_argument("--xjtu_dir", type=str, default=None,
+        help="XJTU-UP root, for cross-dataset eval when it is NOT the "
+             "training set.")
+    p.add_argument("--xpalm_dir", type=str, default=None,
+        help="X-Palm root, for cross-dataset eval when it is NOT the "
+             "training set.")
+
     
     # ─── Misc ─────────────────────────────────────────────────
     p.add_argument("--seed", type=int, default=2025)
