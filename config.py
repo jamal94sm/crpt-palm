@@ -231,6 +231,11 @@ def get_cfg(args=None):
              "printed at runtime).")
     p.add_argument("--ci_level", type=float, default=0.95,
         help="Confidence level for the t-based interval, e.g. 0.95 = 95%%.")
+    p.add_argument("--output_name", type=str, default=None,
+        help="Filename (relative to --output_dir) for the single merged "
+             "config+results text file this run writes. Defaults to "
+             "'{method}_{mode}_seed{seed}.txt', or with --use_CI 1 to "
+             "'{method}_{mode}_multiseed_n{n_runs}_seed{seed}.txt'.")
     
     # ─── Misc ─────────────────────────────────────────────────
     p.add_argument("--seed", type=int, default=2025)
