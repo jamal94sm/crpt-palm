@@ -80,5 +80,12 @@ def get_cfg(args=None):
     p.add_argument("--device", default="cuda")
     p.add_argument("--output_dir", default="./output_vicreg")
 
+
+    p.add_argument("--use_CI", type=int, default=0, choices=[0, 1])
+    p.add_argument("--n_runs", type=int, default=3)
+    p.add_argument("--ci_level", type=float, default=0.95)
+    p.add_argument("--output_name", type=str, default=None)
+
+
     cfg = p.parse_args(args)
     return cfg
