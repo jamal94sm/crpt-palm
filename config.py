@@ -277,8 +277,9 @@ def get_cfg(args=None):
              "each with --use_CI 1 --n_runs N. Writes each baseline's own "
              "output file plus one combined comparison table.")
     p.add_argument("--vicreg_script_path", type=str,
-        default="../vicreg_palm/main.py",
+        default="vicreg-palm/main.py",
         help="Path to vicreg_palm's main.py (relative to this file's "
+             "directory, or absolute). Only used with --run_all_baselines 1.")
              "directory, or absolute). Only used with --run_all_baselines 1.")
     p.add_argument("--combined_output_name", type=str, default=None,
         help="Filename (in --output_dir) for the combined comparison "
