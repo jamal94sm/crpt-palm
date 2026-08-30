@@ -157,7 +157,7 @@ def _shared_flags(cfg):
         flags += [str(s) for s in cfg.train_spectrums]
     flags += ["--use_CI", "1", "--n_runs", str(getattr(cfg, "n_runs", 3)),
               "--ci_level", str(getattr(cfg, "ci_level", 0.95)),
-              "--output_dir", cfg.output_dir]
+              "--output_dir", os.path.abspath(cfg.output_dir)]
     return flags
 
 
