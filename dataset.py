@@ -217,6 +217,94 @@ def split_gallery_probe(samples, id_map, gallery_ratio=0.5, seed=2025):
 
 
 # ══════════════════════════════════════════════════════════════
+#  Cross-dataset evaluation (one-time, after training only)
+# ══════════════════════════════════════════════════════════════
+
+def normalize_dataset_key(data_dir):
+    """CASIA-MS / XJTU-UP / X-Palm -> 'casiams' / 'xjtu' / 'xpalm', from
+    the --data_dir path alone. Mirrors main.py's ckpt_name() naming."""
+    name = os.path.basename(os.path.normpath(data_dir)).lower()
+    if "casia" in name:
+        return "casiams"
+    if "xjtu" in name:
+        return "xjtu"
+    if "xpalm" in name:
+        return "xpalm"
+    return name
+
+
+def scan_by_key(key, data_dir):
+    """Dispatch to the right scan_* function for a dataset key."""
+    if key == "xjtu":
+        return scan_xjtu(data_dir)
+    if key == "xpalm":
+        return scan_xpalm(data_dir)
+    return scan_dataset(data_dir)          # "casiams" or anything else
+
+
+def build_cross_dataset_eval(cfg, other_key, other_data_dir):
+    """One eval_dict-style entry (gallery_loader/probe_loader/...) for a
+    dataset OTHER than the one used for training. Uses a FRESH identity
+    map local to that dataset alone -- identities never overlap across
+    CASIA-MS/XJTU-UP/X-Palm by construction, so there's no shared id space
+    to build here, unlike the in-domain eval_dict in build_datasets().
+    Same --gallery_ratio / --seed convention as in-domain eval; ALL
+    samples of the foreign dataset are used (no train/test ID split --
+    nothing from it was trained on)."""
+    samples = scan_by_key(other_key, other_data_dir)
+    id_map = build_id_map(samples)
+    gal_samples, prb_samples = split_gallery_probe(
+        samples, id_map, cfg.gallery_ratio, cfg.seed)
+
+    gal_ds = CASIADataset(gal_samples, id_map, cfg.img_size, augment=False)
+    prb_ds = CASIADataset(prb_samples, id_map, cfg.img_size, augment=False)
+    gal_loader = DataLoader(gal_ds, batch_size=cfg.batch_size,
+                            shuffle=False, num_workers=cfg.num_workers)
+    prb_loader = DataLoader(prb_ds, batch_size=cfg.batch_size,
+                            shuffle=False, num_workers=cfg.num_workers)
+
+    return {
+        "gallery_loader": gal_loader,
+        "probe_loader": prb_loader,
+        "n_samples": len(samples),
+        "n_ids": len(set(s["identity"] for s in samples)),
+        "n_gallery": len(gal_samples),
+        "n_probe": len(prb_samples),
+    }
+
+
+def build_cross_dataset_eval_dict(cfg):
+    """{"cross_xjtu": {...}, "cross_xpalm": {...}} -- one entry per OTHER
+    dataset (not the training one) that has its root dir configured via
+    --casia_dir/--xjtu_dir/--xpalm_dir. Datasets without a configured dir
+    are skipped with a printed note, not an error."""
+    own_key = normalize_dataset_key(cfg.data_dir)
+    dir_by_key = {"casiams": getattr(cfg, "casia_dir", None),
+                  "xjtu": getattr(cfg, "xjtu_dir", None),
+                  "xpalm": getattr(cfg, "xpalm_dir", None)}
+    flag_by_key = {"casiams": "casia_dir", "xjtu": "xjtu_dir", "xpalm": "xpalm_dir"}
+
+    cross_eval_dict = {}
+    for key, other_dir in dir_by_key.items():
+        if key == own_key:
+            continue                        # this IS the training set
+        if not other_dir:
+            print(f"      (skipping cross-dataset eval on {key}: "
+                  f"--{flag_by_key[key]} not set)")
+            continue
+        print(f"      Scanning cross-dataset '{key}' at {other_dir} ...")
+        cross_eval_dict[f"cross_{key}"] = build_cross_dataset_eval(
+            cfg, key, other_dir)
+
+    return cross_eval_dict
+
+
+# ══════════════════════════════════════════════════════════════
+#  Build everything for a given mode
+# ══════════════════════════════════════════════════════════════
+
+
+# ══════════════════════════════════════════════════════════════
 #  Build everything for a given mode
 # ══════════════════════════════════════════════════════════════
 
