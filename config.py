@@ -236,6 +236,21 @@ def get_cfg(args=None):
              "config+results text file this run writes. Defaults to "
              "'{method}_{mode}_seed{seed}.txt', or with --use_CI 1 to "
              "'{method}_{mode}_multiseed_n{n_runs}_seed{seed}.txt'.")
+
+    # ─── Run all baselines under one shared condition ──────────
+    p.add_argument("--run_all_baselines", type=int, default=0, choices=[0, 1],
+        help="1 = run ViT-sup, CompNet, JEPA, VICReg, C-JEPA, and Palm-JEPA "
+             "(proposed) -- ALL under the SAME shared condition (--data_dir, "
+             "--mode, --train_spectrums, --epochs, --batch_size, etc.), "
+             "each with --use_CI 1 --n_runs N. Writes each baseline's own "
+             "output file plus one combined comparison table.")
+    p.add_argument("--vicreg_script_path", type=str,
+        default="../vicreg_palm/main.py",
+        help="Path to vicreg_palm's main.py (relative to this file's "
+             "directory, or absolute). Only used with --run_all_baselines 1.")
+    p.add_argument("--combined_output_name", type=str, default=None,
+        help="Filename (in --output_dir) for the combined comparison "
+             "table. Defaults to 'ALL_BASELINES.txt'.")
     
     # ─── Misc ─────────────────────────────────────────────────
     p.add_argument("--seed", type=int, default=2025)
