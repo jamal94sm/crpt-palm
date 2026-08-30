@@ -6,6 +6,38 @@ import json
 
 from gabor import BASE_SCALE_LADDER
 
+
+
+# ─── Baseline specs for --run_all_baselines (used by ci_utils.py) ──────
+BASELINE_SPECS = [
+    {"name": "ViT-supervised",       "script": "self",
+     "extra": ["--method", "vit_sup"]},
+    {"name": "CompNet-supervised",   "script": "self",
+     "extra": ["--method", "compnet"]},
+    {"name": "JEPA",                 "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "0"]},
+    {"name": "VICReg",               "script": "vicreg",
+     "extra": []},
+    {"name": "C-JEPA",               "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "0",
+               "--use_cjepa_reg", "1", "--cjepa_weight", "0.001",
+               "--num_blocks", "2"]},
+    {"name": "Palm-JEPA (proposed)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3"]},
+]
+
+SHARED_ARG_NAMES = ["data_dir", "mode", "embed_dim", "num_patches", "epochs",
+                     "batch_size", "learning_rate", "weight_decay",
+                     "warmup_ratio", "aug_multiplier", "eval_every",
+                     "gallery_ratio", "test_sample_ratio", "train_id_ratio",
+                     "seed"]
+
+
+
+
+
 def get_cfg(args=None):
     p = argparse.ArgumentParser(description="JEPA on CASIA-MS")
 
