@@ -44,7 +44,8 @@ nohup python source_pretraining.py --method jepa \
 """
 
 import os
-import json
+import io
+import sys
 import time
 import random
 import math
@@ -71,6 +72,59 @@ CASIA_MEAN = [0.5, 0.5, 0.5]                    # matches dataset.py's Normalize
 CASIA_STD  = [0.5, 0.5, 0.5]
 
 
+def resolve_output_path(cfg):
+    """The single merged config+results text file for this run (or, with
+    --use_CI 1, for the whole multi-seed sweep)."""
+    if getattr(cfg, "output_name", None):
+        name = cfg.output_name
+    elif getattr(cfg, "use_CI", 0):
+        name = (f"{cfg.method}_{cfg.mode}_multiseed_"
+                f"n{getattr(cfg, 'n_runs', 3)}_seed{cfg.seed}.txt")
+    else:
+        name = f"{cfg.method}_{cfg.mode}_seed{cfg.seed}.txt"
+    return os.path.join(cfg.output_dir, name)
+
+
+def write_config_block(path, cfg, header=None):
+    """Append a config dump to path. Caller (main()) truncates the file
+    once at the very start, so this always appends -- safe to call once
+    per single run, or once per seed in a multi-seed sweep."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+    with open(path, "a") as f:
+        f.write(f"\n{'='*70}\n{header or 'RUN CONFIG'}\n{'='*70}\n")
+        for k in sorted(vars(cfg)):
+            f.write(f"{k}: {getattr(cfg, k)}\n")
+        f.write("\n")
+
+
+def capture_print(fn, *args, **kwargs):
+    """Call fn(*args, **kwargs), letting its console output happen exactly
+    as before, while also returning a copy of that output as a string.
+    fn's own code (the history-table printers) is never modified."""
+    buf = io.StringIO()
+    real_stdout = sys.stdout
+
+    class _Tee:
+        def write(self, s):
+            real_stdout.write(s)
+            buf.write(s)
+
+        def flush(self):
+            real_stdout.flush()
+
+    sys.stdout = _Tee()
+    try:
+        fn(*args, **kwargs)
+    finally:
+        sys.stdout = real_stdout
+    return buf.getvalue()
+
+
+def append_text(path, text):
+    os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+    with open(path, "a") as f:
+        f.write(text)
+      
 def gabor_weight_at(epoch, cfg):
     """Auxiliary-loss weight for this epoch (1-indexed)."""
     w0 = float(cfg.gabor_weight)
@@ -138,7 +192,7 @@ def make_scheduler(opt, cfg, total_steps):
 #  JEPA (self-supervised, with optional structural + supervised terms)
 # ══════════════════════════════════════════════════════════════
 
-def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
+def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     img_size = (cfg.img_size, cfg.img_size)
 
     print(f"\n  Building JEPA models...")
@@ -567,106 +621,25 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes):
             if mean_r1 > best_eval["mean_rank1"]:
                 best_eval = {"epoch": epoch, "mean_rank1": mean_r1,
                              "mean_eer": mean_eer}
-                ckpt_path = os.path.join(cfg.output_dir, ckpt_name(cfg))
-                ckpt = {
-                    "epoch": epoch,
-                    "method": "jepa",
-                    "context_encoder": context_encoder.state_dict(),
-                    "target_encoder": target_encoder.state_dict(),
-                    "predictor": predictor.state_dict(),
-                    "arch": {"embed_dim": cfg.embed_dim,
-                             "num_patches": cfg.num_patches,
-                             "img_size": cfg.img_size},
-                    "mean_rank1": mean_r1,
-                }
-                if use_struct:
-                    ckpt["struct_head"] = struct_head.state_dict()
-                    if struct_head_a2 is not struct_head:
-                        ckpt["struct_head_a2"] = struct_head_a2.state_dict()
-                    ckpt["struct_cfg"] = {
-                        "struct_mode": cfg.struct_mode,
-                        "struct_head_mode": cfg.struct_head_mode,
-                        "norm_struct_out": int(cfg.norm_struct_out),
-                        "loss_a1": cfg.loss_a1,
-                        "loss_a2": cfg.loss_a2,
-                        "w_a1": cfg.w_a1, "w_a2": cfg.w_a2,
-                        "task_weighting": cfg.task_weighting,
-                        "gabor_orient": cfg.gabor_orient,
-                        "gabor_gamma": cfg.gabor_gamma,
-                        "gabor_scales": cfg.gabor_scales,
-                        "gabor_K": gabor_bank.K,
-                        "per_channel": gabor_bank.per_channel,
-                    }
-                    if task_weighter is not None:
-                        ckpt["task_weighter"] = task_weighter.state_dict()
-                if sup_head is not None:
-                    ckpt["sup_head"] = sup_head.state_dict()
-                if use_sup:
-                    ckpt["sup_cfg"] = {
-                        "use_supervision": int(use_sup),
-                        "sup_loss": cfg.sup_loss,
-                        "w_sup": cfg.w_sup,
-                    }
-                if cjepa_projector is not None:
-                    ckpt["cjepa_projector"] = cjepa_projector.state_dict()
-                if use_cjepa:
-                    ckpt["cjepa_cfg"] = {
-                        "use_cjepa_reg": int(use_cjepa),
-                        "cjepa_weight": cfg.cjepa_weight,
-                        "cjepa_sim_weight": cfg.cjepa_sim_weight,
-                        "cjepa_std_weight": cfg.cjepa_std_weight,
-                        "cjepa_cov_weight": cfg.cjepa_cov_weight,
-                        "cjepa_proj_dim": cfg.cjepa_proj_dim,
-                    }
-                
-                torch.save(ckpt, ckpt_path)
                 print(f"    ★ New best R1={mean_r1:.2f}% "
-                      f"EER={mean_eer:.2f}% → saved")
+                      f"EER={mean_eer:.2f}%")
 
             print(f"    Summary: Mean R1={mean_r1:.2f}% | "
                   f"Mean EER={mean_eer:.2f}%\n")
 
-    _print_history_jepa(eval_history, eval_dict, use_a1, use_a2, use_sup, use_cjepa)
+    
+    table_text = capture_print(
+        _print_history_jepa, eval_history, eval_dict,
+        use_a1, use_a2, use_sup, use_cjepa)
     _print_footer(cfg, best_eval)
 
-    save_path = os.path.join(cfg.output_dir,
-                             f"jepa_{cfg.mode}_seed{cfg.seed}.json")
-    with open(save_path, "w") as f:
-        json.dump({
-            "mode": cfg.mode, "method": "jepa",
-            "config": {
-                "embed_dim": cfg.embed_dim,
-                "num_patches": cfg.num_patches,
-                "epochs": cfg.epochs,
-                "train_spectrums": cfg.train_spectrums,
-                "aug_multiplier": cfg.aug_multiplier,
-                "use_corruption": int(getattr(cfg, "use_corruption", 0)),
-                "struct_mode": cfg.struct_mode,
-                "loss_a1": cfg.loss_a1,
-                "loss_a2": cfg.loss_a2,
-                "struct_head_mode": cfg.struct_head_mode,
-                "norm_struct_out": int(cfg.norm_struct_out),
-                "w_a1": float(cfg.w_a1),
-                "w_a2": float(cfg.w_a2),
-                "struct_head_hidden": int(cfg.struct_head_hidden),
-                "task_weighting": cfg.task_weighting,
-                "infonce_temp": float(cfg.infonce_temp),
-                "gabor_orient": int(cfg.gabor_orient),
-                "gabor_gray": int(getattr(cfg, "gabor_gray", 1)),
-                "gabor_gamma": float(cfg.gabor_gamma),
-                "gabor_scales": [list(s) for s in cfg.gabor_scales],
-                "use_supervision": int(use_sup),
-                "sup_loss": cfg.sup_loss,
-                "w_sup": float(cfg.w_sup),
-                "use_cjepa_reg": int(use_cjepa),
-                "cjepa_weight": float(cfg.cjepa_weight),
-                "cjepa_sim_weight": float(cfg.cjepa_sim_weight),
-                "cjepa_std_weight": float(cfg.cjepa_std_weight),
-                "cjepa_cov_weight": float(cfg.cjepa_cov_weight),
-                },
-            "best": best_eval, "history": eval_history,
-        }, f, indent=2)
-    print(f"\n  Saved: {save_path}")
+    write_config_block(out_path, cfg, header=f"RUN CONFIG (seed={cfg.seed})")
+    append_text(out_path, f"\nRESULTS -- method=jepa mode={cfg.mode} "
+                           f"seed={cfg.seed} (LAST epoch = {eval_history[-1]['epoch']})\n"
+                           f"{table_text}\n")
+    print(f"\n  Saved: {out_path}")
+
+    return eval_history[-1] if eval_history else None
 
 
 def _print_history_jepa(eval_history, eval_dict, use_a1=False, use_a2=False,
@@ -731,7 +704,7 @@ def _print_history_jepa(eval_history, eval_dict, use_a1=False, use_a2=False,
 #  CompNet (supervised cross-entropy on training IDs)
 # ══════════════════════════════════════════════════════════════
 
-def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_map):
+def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_map, out_path):
     print(f"\n  Building CompNet (supervised)...")
     model = CompNet(cfg.embed_dim, n_train_ids, base=cfg.compnet_channels).to(cfg.device)
     n_par = sum(p.numel() for p in model.parameters())
@@ -802,53 +775,32 @@ def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
                 eval_entry[name] = r
             eval_history.append(eval_entry)
 
-            if mean_eer < best_eval["mean_eer"]:        # save on MIN EER
+            if mean_eer < best_eval["mean_eer"]:        # track MIN EER
                 best_eval = {"epoch": epoch, "mean_rank1": mean_r1,
                              "mean_eer": mean_eer}
-                ckpt_path = os.path.join(cfg.output_dir, ckpt_name(cfg))
-                torch.save({
-                    "epoch": epoch,
-                    "method": "compnet",
-                    "backbone": model.backbone.state_dict(),
-                    "classifier": model.classifier.state_dict(),
-                    "arch": {"embed_dim": cfg.embed_dim,
-                             "compnet_channels": cfg.compnet_channels,
-                             "img_size": cfg.img_size},
-                    "train_id_map": train_id_map,        # identity str -> class idx
-                    "n_train_ids": n_train_ids,
-                    "mean_rank1": mean_r1, "mean_eer": mean_eer,
-                }, ckpt_path)
                 print(f"    ★ New best EER={mean_eer:.2f}% "
-                      f"(R1={mean_r1:.2f}%) → saved")
+                      f"(R1={mean_r1:.2f}%)")
 
             print(f"    Summary: Mean R1={mean_r1:.2f}% | "
                   f"Mean EER={mean_eer:.2f}%\n")
 
-    _print_history_compnet(eval_history, eval_dict)
+    table_text = capture_print(_print_history_compnet, eval_history, eval_dict)
     _print_footer(cfg, best_eval)
 
-    save_path = os.path.join(cfg.output_dir,
-                             f"compnet_{cfg.mode}_seed{cfg.seed}.json")
-    with open(save_path, "w") as f:
-        json.dump({
-            "mode": cfg.mode, "method": "compnet",
-            "config": {
-                "embed_dim": cfg.embed_dim,
-                "compnet_channels": cfg.compnet_channels,
-                "epochs": cfg.epochs,
-                "train_spectrums": cfg.train_spectrums,
-                "aug_multiplier": cfg.aug_multiplier,
-            },
-            "best": best_eval, "history": eval_history,
-        }, f, indent=2)
-    print(f"\n  Saved: {save_path}")
+    write_config_block(out_path, cfg, header=f"RUN CONFIG (seed={cfg.seed})")
+    append_text(out_path, f"\nRESULTS -- method=compnet mode={cfg.mode} "
+                           f"seed={cfg.seed} (LAST epoch = {eval_history[-1]['epoch']})\n"
+                           f"{table_text}\n")
+    print(f"\n  Saved: {out_path}")
+
+    return eval_history[-1] if eval_history else None
 
 
 # ══════════════════════════════════════════════════════════════
 #  Supervised ViT (JEPA encoder + CE head on training IDs)
 # ══════════════════════════════════════════════════════════════
 
-def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_map):
+def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_map, out_path):
     print(f"\n  Building Supervised ViT (JEPA encoder + CE head)...")
     model = PlainViT(img_size=cfg.img_size, patch_size=cfg.patch_size,
                      embed_dim=cfg.embed_dim, depth=cfg.vit_depth,
@@ -921,48 +873,25 @@ def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
                 eval_entry[name] = r
             eval_history.append(eval_entry)
 
-            if mean_eer < best_eval["mean_eer"]:        # save on MIN EER
+            if mean_eer < best_eval["mean_eer"]:        # track MIN EER
                 best_eval = {"epoch": epoch, "mean_rank1": mean_r1,
                              "mean_eer": mean_eer}
-                ckpt_path = os.path.join(cfg.output_dir, ckpt_name(cfg))
-                torch.save({
-                    "epoch": epoch,
-                    "method": "vit_sup",
-                    "full_state": model.state_dict(),
-                    "classifier": model.classifier.state_dict(),
-                    "arch": {"embed_dim": cfg.embed_dim,
-                             "patch_size": cfg.patch_size,
-                             "vit_depth": cfg.vit_depth,
-                             "vit_heads": cfg.vit_heads,
-                             "img_size": cfg.img_size},
-                    "train_id_map": train_id_map,
-                    "n_train_ids": n_train_ids,
-                    "mean_rank1": mean_r1, "mean_eer": mean_eer,
-                }, ckpt_path)
                 print(f"    ★ New best EER={mean_eer:.2f}% "
-                      f"(R1={mean_r1:.2f}%) → saved")
+                      f"(R1={mean_r1:.2f}%)")
 
             print(f"    Summary: Mean R1={mean_r1:.2f}% | "
                   f"Mean EER={mean_eer:.2f}%\n")
 
-    _print_history_compnet(eval_history, eval_dict)
+    table_text = capture_print(_print_history_compnet, eval_history, eval_dict)
     _print_footer(cfg, best_eval)
 
-    save_path = os.path.join(cfg.output_dir,
-                             f"vitsup_{cfg.mode}_seed{cfg.seed}.json")
-    with open(save_path, "w") as f:
-        json.dump({
-            "mode": cfg.mode, "method": "vit_sup",
-            "config": {
-                "embed_dim": cfg.embed_dim,
-                "num_patches": cfg.num_patches,
-                "epochs": cfg.epochs,
-                "train_spectrums": cfg.train_spectrums,
-                "aug_multiplier": cfg.aug_multiplier,
-            },
-            "best": best_eval, "history": eval_history,
-        }, f, indent=2)
-    print(f"\n  Saved: {save_path}")
+    write_config_block(out_path, cfg, header=f"RUN CONFIG (seed={cfg.seed})")
+    append_text(out_path, f"\nRESULTS -- method=vit_sup mode={cfg.mode} "
+                           f"seed={cfg.seed} (LAST epoch = {eval_history[-1]['epoch']})\n"
+                           f"{table_text}\n")
+    print(f"\n  Saved: {out_path}")
+
+    return eval_history[-1] if eval_history else None
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1015,20 +944,24 @@ def main():
           f"epochs={cfg.epochs}   aug={cfg.aug_multiplier}×")
     print(f"{'='*80}\n")
 
+    out_path = resolve_output_path(cfg)
+    open(out_path, "w").close()      # start this run's file fresh; every
+                                      # write below appends to it
+
     if bool(getattr(cfg, "use_CI", 0)):
         train_fns = {"jepa": train_jepa, "compnet": train_compnet,
                      "vit_sup": train_vit_sup}
-        run_multi_seed(cfg, train_fns)
+        run_multi_seed(cfg, train_fns, out_path)
         return
 
     train_loader, eval_dict, id_map, n_train_ids, train_id_map = build_datasets(cfg)
 
     if cfg.method == "jepa":
-        train_jepa(cfg, train_loader, eval_dict, id_map, n_train_ids)
+        train_jepa(cfg, train_loader, eval_dict, id_map, n_train_ids, out_path)
     elif cfg.method == "compnet":
-        train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_map)
+        train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_map, out_path)
     elif cfg.method == "vit_sup":
-        train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_map)
+        train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_map, out_path)
     else:
         raise SystemExit(f"unknown method: {cfg.method}")
 
