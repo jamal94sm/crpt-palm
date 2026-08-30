@@ -944,6 +944,11 @@ def main():
           f"epochs={cfg.epochs}   aug={cfg.aug_multiplier}×")
     print(f"{'='*80}\n")
 
+    if bool(getattr(cfg, "run_all_baselines", 0)):
+        from ci_utils import run_all_baselines
+        run_all_baselines(cfg)
+        return
+
     out_path = resolve_output_path(cfg)
     open(out_path, "w").close()      # start this run's file fresh; every
                                       # write below appends to it
