@@ -158,6 +158,13 @@ def _shared_flags(cfg):
     flags += ["--use_CI", "1", "--n_runs", str(getattr(cfg, "n_runs", 3)),
               "--ci_level", str(getattr(cfg, "ci_level", 0.95)),
               "--output_dir", os.path.abspath(cfg.output_dir)]
+
+    if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
+        flags += ["--use_cross_dataset_eval", "1"]
+        for name in ("casia_dir", "xjtu_dir", "xpalm_dir"):
+            val = getattr(cfg, name, None)
+            if val:
+                flags += [f"--{name}", val]
     return flags
 
 
