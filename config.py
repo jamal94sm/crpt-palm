@@ -271,12 +271,7 @@ def get_cfg(args=None):
              "config+results text file this run writes. Defaults to "
              "'{method}_{mode}_seed{seed}.txt', or with --use_CI 1 to "
              "'{method}_{mode}_multiseed_n{n_runs}_seed{seed}.txt'.")
-    
-    # cross-dataset evaluation
-    p.add_argument("--use_cross_dataset_eval", type=int, default=0, choices=[0, 1])
-    p.add_argument("--casia_dir", type=str, default=None)
-    p.add_argument("--xjtu_dir", type=str, default=None)
-    p.add_argument("--xpalm_dir", type=str, default=None)
+
 
     # ─── Run all baselines under one shared condition ──────────
     p.add_argument("--run_all_baselines", type=int, default=0, choices=[0, 1],
