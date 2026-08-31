@@ -188,6 +188,22 @@ def _parse_summary_csv(path):
     return out
 
 
+def _already_complete(path, expected_n_runs):
+    """True if path exists, has a well-formed SUMMARY_CSV block, and that
+    block's n matches expected_n_runs (so a leftover file from an earlier,
+    smaller --n_runs sweep doesn't get silently reused)."""
+    if not os.path.isfile(path):
+        return False
+    try:
+        summary = _parse_summary_csv(path)
+    except Exception:
+        return False
+    if not summary:
+        return False
+    n_seen = next(iter(summary.values()))["n"]
+    return n_seen == expected_n_runs
+
+
 def run_all_baselines(cfg):
     from main import write_config_block, append_text
 
@@ -205,9 +221,21 @@ def run_all_baselines(cfg):
     shared = _shared_flags(cfg)
     results = {}
 
+    force_rerun = bool(getattr(cfg, "force_rerun_baselines", 0))
+    n_runs = int(getattr(cfg, "n_runs", 3))
+
     for spec in BASELINE_SPECS:
         out_name = (spec["name"].replace(" ", "_")
                     .replace("(", "").replace(")", "") + ".txt")
+        out_file = os.path.join(cfg.output_dir, out_name)
+
+        if not force_rerun and _already_complete(out_file, n_runs):
+            print(f"\n{'#'*80}\n  BASELINE: {spec['name']}  "
+                  f"-- SKIPPED (already complete, n_runs={n_runs} matches)\n"
+                  f"  {out_file}\n{'#'*80}\n")
+            results[spec["name"]] = _parse_summary_csv(out_file)
+            continue
+
         if spec["script"] == "self":
             cmd = [sys.executable, self_main] + shared + spec["extra"] + \
                   ["--output_name", out_name]
@@ -221,8 +249,7 @@ def run_all_baselines(cfg):
         print(f"  CMD: {' '.join(cmd)}\n{'#'*80}\n")
         subprocess.run(cmd, cwd=cwd, check=True)
 
-        results[spec["name"]] = _parse_summary_csv(
-            os.path.join(cfg.output_dir, out_name))
+        results[spec["name"]] = _parse_summary_csv(out_file)
 
     # ─── Combined comparison table ───
     eval_names = ["seen_dom_unseen_id", "unseen_dom_seen_id", "unseen_dom_unseen_id"]
