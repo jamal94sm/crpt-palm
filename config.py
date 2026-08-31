@@ -287,6 +287,12 @@ def get_cfg(args=None):
     p.add_argument("--combined_output_name", type=str, default=None,
         help="Filename (in --output_dir) for the combined comparison "
              "table. Defaults to 'ALL_BASELINES.txt'.")
+    p.add_argument("--force_rerun_baselines", type=int, default=0, choices=[0, 1],
+        help="1 = re-run every baseline even if its output file already "
+             "has a complete SUMMARY_CSV block from a prior run. "
+             "0 (default) = skip any baseline whose output already looks "
+             "complete, and reuse its parsed results for the combined table.")
+    
 
     # ─── Cross-dataset evaluation (one-time, after training) ───
     p.add_argument("--use_cross_dataset_eval", type=int, default=0, choices=[0, 1],
