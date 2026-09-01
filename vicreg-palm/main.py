@@ -94,14 +94,18 @@ def compute_ci(values, level=0.95):
             "ci_high": mean + half, "half_width": half, "n": n}
 
 
-def _flatten_entry(entry, eval_names):
+def _flatten_entry(entry):
+    """Auto-detects every split-shaped entry (any key whose value is a
+    dict with both 'rank1' and 'eer') instead of requiring a fixed
+    eval_names list -- this is what lets cross-dataset entries
+    ("cross_xjtu", "cross_xpalm", ...) get swept up automatically
+    alongside the in-domain splits."""
     out = {"mean_rank1": entry.get("mean_rank1"),
            "mean_eer": entry.get("mean_eer")}
-    for name in eval_names:
-        r = entry.get(name)
-        if r is not None:
-            out[f"{name}__rank1"] = r["rank1"]
-            out[f"{name}__eer"] = r["eer"]
+    for key, val in entry.items():
+        if isinstance(val, dict) and "rank1" in val and "eer" in val:
+            out[f"{key}__rank1"] = val["rank1"]
+            out[f"{key}__eer"] = val["eer"]
     return out
 
 
@@ -279,6 +283,9 @@ def train_vicreg(cfg, train_loader, eval_dict, out_path):
                            f"trained on {cfg.data_dir})\n{cross_text}\n")
     print(f"\n Saved: {out_path}")
 
+    if cross_dataset_results and eval_history:
+        eval_history[-1].update(cross_dataset_results)
+
     return eval_history[-1] if eval_history else None
 
 
@@ -291,7 +298,6 @@ def run_multi_seed(cfg, out_path):
         print(f"\n NOTE: n_runs={n_runs} < 10 -- prefer MEAN +/- STD over "
               f"the CI below unless you raise --n_runs.\n")
 
-    eval_names_ref = None
     per_run = []
 
     for i in range(n_runs):
@@ -304,11 +310,9 @@ def run_multi_seed(cfg, out_path):
         set_seed(seed)
         train_loader, eval_dict, id_map, n_train_ids, train_id_map = \
             build_datasets(run_cfg)
-        if eval_names_ref is None:
-            eval_names_ref = list(eval_dict.keys())
 
         final_entry = train_vicreg(run_cfg, train_loader, eval_dict, out_path)
-        per_run.append(_flatten_entry(final_entry, eval_names_ref))
+        per_run.append(_flatten_entry(final_entry))
 
     metric_keys = sorted(per_run[0].keys())
     summary = {key: compute_ci([r[key] for r in per_run if key in r], level=level)
