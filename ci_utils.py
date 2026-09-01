@@ -52,14 +52,18 @@ def compute_ci(values, level=0.95):
             "ci_high": mean + half, "half_width": half, "n": n}
 
 
-def _flatten_entry(entry, eval_names):
+def _flatten_entry(entry):
+    """Auto-detects every split-shaped entry (any key whose value is a
+    dict with both 'rank1' and 'eer') instead of requiring a fixed
+    eval_names list -- this is what lets cross-dataset entries
+    ("cross_xjtu", "cross_xpalm", ...) get swept up automatically
+    alongside the in-domain splits."""
     out = {"mean_rank1": entry.get("mean_rank1"),
            "mean_eer": entry.get("mean_eer")}
-    for name in eval_names:
-        r = entry.get(name)
-        if r is not None:
-            out[f"{name}__rank1"] = r["rank1"]
-            out[f"{name}__eer"] = r["eer"]
+    for key, val in entry.items():
+        if isinstance(val, dict) and "rank1" in val and "eer" in val:
+            out[f"{key}__rank1"] = val["rank1"]
+            out[f"{key}__eer"] = val["eer"]
     return out
 
 
@@ -93,7 +97,6 @@ def run_multi_seed(cfg, train_fns, out_path):
           f"n_runs={n_runs}   seeds={base_seed}..{base_seed + n_runs - 1}")
     print(f"{'='*80}\n")
 
-    eval_names_ref = None
     per_run = []
 
     for i in range(n_runs):
@@ -108,9 +111,6 @@ def run_multi_seed(cfg, train_fns, out_path):
         train_loader, eval_dict, id_map, n_train_ids, train_id_map = \
             build_datasets(run_cfg)
 
-        if eval_names_ref is None:
-            eval_names_ref = list(eval_dict.keys())
-
         fn = train_fns[cfg.method]
         if cfg.method == "jepa":
             final_entry = fn(run_cfg, train_loader, eval_dict, id_map,
@@ -119,7 +119,7 @@ def run_multi_seed(cfg, train_fns, out_path):
             final_entry = fn(run_cfg, train_loader, eval_dict, id_map,
                               n_train_ids, train_id_map, out_path)
 
-        per_run.append(_flatten_entry(final_entry, eval_names_ref))
+        per_run.append(_flatten_entry(final_entry))
 
     metric_keys = sorted(per_run[0].keys())
     summary = {key: compute_ci([r[key] for r in per_run if key in r], level=level)
@@ -252,11 +252,27 @@ def run_all_baselines(cfg):
         results[spec["name"]] = _parse_summary_csv(out_file)
 
     # ─── Combined comparison table ───
-    eval_names = ["seen_dom_unseen_id", "unseen_dom_seen_id", "unseen_dom_unseen_id"]
-    cols = [(name, metric) for name in eval_names for metric in ("eer", "rank1")]
+    # Auto-detect every split present across ALL baselines' results --
+    # in-domain splits plus any cross-dataset splits ("cross_xjtu",
+    # "cross_xpalm", ...) -- instead of a hardcoded in-domain-only list.
+    all_names = set()
+    for r in results.values():
+        for key in r:
+            if key.endswith("__eer"):
+                all_names.add(key[:-5])
+            elif key.endswith("__rank1"):
+                all_names.add(key[:-7])
+
+    in_domain_order = ["seen_dom_unseen_id", "unseen_dom_seen_id", "unseen_dom_unseen_id"]
+    cross_order = sorted(n for n in all_names if n.startswith("cross_"))
+    other_order = sorted(n for n in all_names
+                          if n not in in_domain_order and n not in cross_order)
+    ordered_names = ([n for n in in_domain_order if n in all_names]
+                      + cross_order + other_order)
+    cols = [(name, metric) for name in ordered_names for metric in ("eer", "rank1")]
 
     header = f"{'Method':<24}" + "".join(
-        f"{name[:10]}_{metric}".rjust(18) for name, metric in cols)
+        f"{name[:14]}_{metric}".rjust(20) for name, metric in cols)
     lines = [header, "-" * len(header)]
     for spec in BASELINE_SPECS:
         row = f"{spec['name']:<24}"
@@ -264,7 +280,7 @@ def run_all_baselines(cfg):
         for name, metric in cols:
             key = f"{name}__{metric}"
             cell = f"{r[key]['mean']:.2f} \u00b1 {r[key]['std']:.2f}" if key in r else "---"
-            row += cell.rjust(18)
+            row += cell.rjust(20)
         lines.append(row)
     table_text = "\n".join(lines) + "\n"
 
