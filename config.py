@@ -73,7 +73,11 @@ def get_cfg(args=None):
                         "'cross_domain' = selected domains, all IDs, "
                         "'cross_domain_openset' = selected domains+IDs")
     p.add_argument("--train_spectrums", nargs="*", default=["WHT", "940"],
-                   help="Spectrums for training (cross_domain modes)")
+        help="Spectrums for training (cross_domain modes)")
+    p.add_argument("--test_spectrums", nargs="*", default=None,
+        help="Optional: restrict cross-domain eval to these specific "
+             "domains (default: None = every domain not in "
+             "--train_spectrums). Only affects 'unseen_dom_*' eval sets.")
     p.add_argument("--train_id_ratio", type=float, default=0.8,
                    help="Fraction of IDs for training (openset mode)")
     p.add_argument("--test_sample_ratio", type=float, default=0.2,
