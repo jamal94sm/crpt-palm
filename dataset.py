@@ -447,8 +447,15 @@ def scan_xpalm(data_root):
                 if len(parts) < 4:
                     continue
 
-                hand = parts[1].lower()
-                domain = parts[2].lower()          # color: white/yellow/ir/...
+                if parts[1].lower() in ("left", "right"):
+                    hand = parts[1].lower()
+                    domain = parts[2].lower()
+                elif parts[2].lower() in ("left", "right"):
+                    hand = parts[2].lower()
+                    domain = parts[3].lower()
+                else:
+                    continue
+
                 identity = f"XPALM_{subj_id}_{hand}"
 
                 samples.append({
