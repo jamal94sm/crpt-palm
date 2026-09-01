@@ -392,38 +392,8 @@ def run_all_baselines(cfg):
         results[spec["name"]] = _parse_summary_csv(out_file)
 
     # ─── Combined comparison table ───
-    # Auto-detect every split present across ALL baselines' results --
-    # in-domain splits plus any cross-dataset splits ("cross_xjtu",
-    # "cross_xpalm", ...) -- instead of a hardcoded in-domain-only list.
-    all_names = set()
-    for r in results.values():
-        for key in r:
-            if key.endswith("__eer"):
-                all_names.add(key[:-5])
-            elif key.endswith("__rank1"):
-                all_names.add(key[:-7])
-
-    in_domain_order = ["seen_dom_unseen_id", "unseen_dom_seen_id", "unseen_dom_unseen_id"]
-    cross_order = sorted(n for n in all_names if n.startswith("cross_"))
-    other_order = sorted(n for n in all_names
-                          if n not in in_domain_order and n not in cross_order)
-    ordered_names = ([n for n in in_domain_order if n in all_names]
-                      + cross_order + other_order)
-    cols = [(name, metric) for name in ordered_names for metric in ("eer", "rank1")]
-
-    header = f"{'Method':<24}" + "".join(
-        f"{name[:14]}_{metric}".rjust(20) for name, metric in cols)
-    lines = [header, "-" * len(header)]
-    for spec in BASELINE_SPECS:
-        row = f"{spec['name']:<24}"
-        r = results[spec["name"]]
-        for name, metric in cols:
-            key = f"{name}__{metric}"
-            cell = f"{r[key]['mean']:.2f} \u00b1 {r[key]['std']:.2f}" if key in r else "---"
-            row += cell.rjust(20)
-        lines.append(row)
-    table_text = "\n".join(lines) + "\n"
-
+    table_text = _build_combined_table(results)
+    
     print("\n" + table_text)
     append_text(combined_path,
                 f"\nCOMBINED RESULTS (mean \u00b1 std over "
