@@ -17,6 +17,7 @@ directly.
 """
 
 import os
+import re
 import sys
 import copy
 import random
@@ -188,6 +189,145 @@ def _parse_summary_csv(path):
     return out
 
 
+_CROSS_ROW_RE = re.compile(r"^\s*(cross_\S+)\s+([-\d.]+)\s+([-\d.]+)\s*$")
+
+
+def _extract_cross_dataset_per_seed(path):
+    """Re-parse an already-saved baseline .txt file and pull out the
+    per-seed 'CROSS-DATASET EVALUATION' tables that were written before
+    main.py started merging cross_dataset_results into eval_history[-1].
+    Returns a list of {dataset_name: {"rank1":.., "eer":..}}, one dict
+    per seed run found, in file order (== seed order, since runs are
+    appended to the file sequentially)."""
+    with open(path) as f:
+        lines = f.readlines()
+
+    per_seed = []
+    in_block = False
+    current = {}
+
+    for line in lines:
+        stripped = line.rstrip("\n")
+        if "CROSS-DATASET EVALUATION" in stripped:
+            in_block = True
+            current = {}
+            continue
+        if in_block:
+            if not stripped.strip():              # blank line ends the block
+                if current:
+                    per_seed.append(current)
+                in_block = False
+                continue
+            if "not run" in stripped:              # that seed had it disabled
+                in_block = False
+                continue
+            if stripped.strip().startswith("dataset"):  # header row, skip
+                continue
+            m = _CROSS_ROW_RE.match(stripped)
+            if m:
+                name = m.group(1)
+                rank1, eer = float(m.group(2)), float(m.group(3))
+                current[name] = {"rank1": rank1, "eer": eer}
+    if in_block and current:                       # file ended mid-block
+        per_seed.append(current)
+
+    return per_seed
+
+
+def rebuild_cross_dataset_summary(path, level=0.95):
+    """Aggregate the per-seed cross-dataset tables already saved in path
+    into the same {metric_key: {mean, std, ci_low, ci_high, n}} shape
+    compute_ci/_flatten_entry produce -- so it can be merged with that
+    file's existing (in-domain-only) SUMMARY_CSV. Returns {} if no
+    cross-dataset blocks are found."""
+    per_seed = _extract_cross_dataset_per_seed(path)
+    if not per_seed:
+        return {}
+
+    dataset_names = set()
+    for run in per_seed:
+        dataset_names.update(run.keys())
+
+    summary = {}
+    for name in dataset_names:
+        for metric in ("rank1", "eer"):
+            values = [run[name][metric] for run in per_seed if name in run]
+            if values:
+                summary[f"{name}__{metric}"] = compute_ci(values, level=level)
+    return summary
+
+
+def _build_combined_table(results):
+    """results: {baseline_name: {metric_key: {mean, std, ci_low, ci_high, n}}}.
+    Auto-detects every split present (in-domain + any cross_* datasets)
+    and renders the mean +/- std comparison table. Shared by
+    run_all_baselines (live) and rebuild_combined_table_from_existing
+    (retroactive, from already-saved files)."""
+    all_names = set()
+    for r in results.values():
+        for key in r:
+            if key.endswith("__eer"):
+                all_names.add(key[:-5])
+            elif key.endswith("__rank1"):
+                all_names.add(key[:-7])
+
+    in_domain_order = ["seen_dom_unseen_id", "unseen_dom_seen_id", "unseen_dom_unseen_id"]
+    cross_order = sorted(n for n in all_names if n.startswith("cross_"))
+    other_order = sorted(n for n in all_names
+                          if n not in in_domain_order and n not in cross_order)
+    ordered_names = ([n for n in in_domain_order if n in all_names]
+                      + cross_order + other_order)
+    cols = [(name, metric) for name in ordered_names for metric in ("eer", "rank1")]
+
+    header = f"{'Method':<24}" + "".join(
+        f"{name[:14]}_{metric}".rjust(20) for name, metric in cols)
+    lines = [header, "-" * len(header)]
+    for name, r in results.items():
+        row = f"{name:<24}"
+        for col_name, metric in cols:
+            key = f"{col_name}__{metric}"
+            cell = f"{r[key]['mean']:.2f} \u00b1 {r[key]['std']:.2f}" if key in r else "---"
+            row += cell.rjust(20)
+        lines.append(row)
+    return "\n".join(lines) + "\n"
+
+
+def rebuild_combined_table_from_existing(output_dir, combined_output_name=None,
+                                          ci_level=0.95):
+    """Recompute ALL_BASELINES.txt from already-saved per-baseline .txt
+    files -- NO retraining. Merges each file's existing SUMMARY_CSV
+    (in-domain results) with cross-dataset numbers re-extracted from that
+    same file's per-seed CROSS-DATASET EVALUATION blocks. Run this ONCE
+    to backfill cross-dataset columns into a sweep that already finished
+    before the forward-fix."""
+    combined_path = os.path.join(output_dir, combined_output_name or "ALL_BASELINES.txt")
+    results = {}
+
+    for spec in BASELINE_SPECS:
+        out_name = (spec["name"].replace(" ", "_")
+                    .replace("(", "").replace(")", "") + ".txt")
+        out_file = os.path.join(output_dir, out_name)
+        if not os.path.isfile(out_file):
+            print(f"  !! Missing: {out_file} -- skipping {spec['name']}")
+            continue
+
+        summary = _parse_summary_csv(out_file)           # existing in-domain
+        cross_summary = rebuild_cross_dataset_summary(out_file, level=ci_level)
+        summary.update(cross_summary)                     # merge cross-dataset in
+        results[spec["name"]] = summary
+
+        n_cross = len({k.rsplit("__", 1)[0] for k in cross_summary})
+        print(f"  {spec['name']}: {n_cross} cross-dataset split(s) recovered")
+
+    table_text = _build_combined_table(results)
+    print("\n" + table_text)
+
+    with open(combined_path, "a") as f:
+        f.write(f"\nCROSS-DATASET COLUMNS BACKFILLED FROM EXISTING FILES "
+                f"(no retraining)\n{table_text}\n")
+    print(f"\n  Appended backfilled table to: {combined_path}")
+    return results
+                                              
 def _already_complete(path, expected_n_runs):
     """True if path exists, has a well-formed SUMMARY_CSV block, and that
     block's n matches expected_n_runs (so a leftover file from an earlier,
