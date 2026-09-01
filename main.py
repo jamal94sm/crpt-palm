@@ -666,6 +666,9 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                            f"trained on {cfg.data_dir})\n{cross_text}\n")
     print(f"\n  Saved: {out_path}")
 
+    if cross_dataset_results and eval_history:
+        eval_history[-1].update(cross_dataset_results)
+
     return eval_history[-1] if eval_history else None
 
 
@@ -847,6 +850,9 @@ def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
                            f"trained on {cfg.data_dir})\n{cross_text}\n")
     print(f"\n  Saved: {out_path}")
 
+    if cross_dataset_results and eval_history:
+        eval_history[-1].update(cross_dataset_results)
+
     return eval_history[-1] if eval_history else None
 
 
@@ -971,6 +977,9 @@ def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
     append_text(out_path, f"\nCROSS-DATASET EVALUATION (final epoch only, "
                            f"trained on {cfg.data_dir})\n{cross_text}\n")
     print(f"\n  Saved: {out_path}")
+
+    if cross_dataset_results and eval_history:
+        eval_history[-1].update(cross_dataset_results)
 
     return eval_history[-1] if eval_history else None
 
