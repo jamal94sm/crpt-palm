@@ -73,15 +73,20 @@ def split_mode_all(samples, test_ratio=0.2, seed=2025):
     return train, {"all": test}
 
 
-def split_mode_cross_domain(samples, train_spectrums, seed=2025):
+def split_mode_cross_domain(samples, train_spectrums, seed=2025, test_spectrums=None):
     """
     Mode 2: selected domains × all IDs.
     ALL training domain samples used for training (no held-out).
     Eval on each unseen domain separately.
+    test_spectrums: optional explicit list restricting which unseen domains
+        get evaluated (default: None = every domain not in train_spectrums,
+        the original behaviour).
     Returns: train_samples, {"460": [...], "630": [...], ...}
     """
     all_spectrums = sorted(set(s["spectrum"] for s in samples))
     unseen_spectrums = [s for s in all_spectrums if s not in train_spectrums]
+    if test_spectrums:
+        unseen_spectrums = [s for s in unseen_spectrums if s in test_spectrums]
 
     train = [s for s in samples if s["spectrum"] in train_spectrums]
 
@@ -95,7 +100,8 @@ def split_mode_cross_domain(samples, train_spectrums, seed=2025):
 
 
 def split_mode_cross_domain_openset(samples, train_spectrums,
-                                     train_id_ratio=0.8, seed=2025):
+                                     train_id_ratio=0.8, seed=2025,
+                                     test_spectrums=None):
     """
     Mode 3: selected domains × selected IDs.
     ALL training domain × training ID samples used for training.
@@ -112,6 +118,8 @@ def split_mode_cross_domain_openset(samples, train_spectrums,
     # was: unseen_spectrums = [s for s in ALL_SPECTRUMS if s not in train_spectrums]
     all_spectrums = sorted(set(s["spectrum"] for s in samples))
     unseen_spectrums = [s for s in all_spectrums if s not in train_spectrums]
+    if test_spectrums:
+        unseen_spectrums = [s for s in unseen_spectrums if s in test_spectrums]
 
     # Training: ALL seen domains × seen IDs
     train = [s for s in samples
@@ -329,14 +337,20 @@ def build_datasets(cfg):
         info = "All domains × All IDs"
     elif cfg.mode == "cross_domain":
         train_samples, eval_sets = split_mode_cross_domain(
-            all_samples, cfg.train_spectrums, cfg.seed)
+            all_samples, cfg.train_spectrums, cfg.seed,
+            test_spectrums=getattr(cfg, "test_spectrums", None))
         info = f"Train domains: {cfg.train_spectrums}"
+        if getattr(cfg, "test_spectrums", None):
+            info += f", Test domains: {cfg.test_spectrums}"
     elif cfg.mode == "cross_domain_openset":
         train_samples, eval_sets = split_mode_cross_domain_openset(
             all_samples, cfg.train_spectrums,
-            cfg.train_id_ratio, cfg.seed)
+            cfg.train_id_ratio, cfg.seed,
+            test_spectrums=getattr(cfg, "test_spectrums", None))
         info = (f"Train domains: {cfg.train_spectrums}, "
                 f"Train ID ratio: {cfg.train_id_ratio}")
+        if getattr(cfg, "test_spectrums", None):
+            info += f", Test domains: {cfg.test_spectrums}"
 
     # Global ID map from ALL samples: keeps gallery/probe labels consistent
     # across seen AND unseen identities (needed for evaluation).
@@ -395,14 +409,30 @@ def build_datasets(cfg):
 def scan_xpalm(data_root):
     """
     Scan X-Palm dataset (scanner_roi + smartphone_roi).
-    Domains are simplified strictly to 'scanner' and 'smartphone'.
+
+    Domain (spectrum) is now the FINE-GRAINED condition/color parsed from
+    the filename, not a coarse scanner/smartphone label -- so any subset
+    of conditions/colors can be used as --train_spectrums / --test_spectrums,
+    mixed across devices if desired (e.g. train on scanner "white"+"yellow"
+    plus smartphone "roll"+"wet"+"rnd").
+
+    Scanner filenames:    {subj}_{Hand}_{color}_{iter}.jpg
+      e.g. 1_Left_white_1.jpg -> domain "white"
+    Smartphone filenames: {subj}_{hand}_{condition}.jpg
+                       or  {subj}_{hand}_rnd_{k}.jpg  (k = 1..5)
+      e.g. 1_left_roll.jpg    -> domain "roll"
+           1_left_rnd_3.jpg   -> domain "rnd"  (all 5 rnd_k collapsed to one)
+
+    Identity is shared across scanner/smartphone for the same subject+hand
+    ("XPALM_{subj}_{hand}"), matching X-Palm's design as a PAIRED
+    multispectral-to-smartphone dataset -- this is what makes cross-device
+    train/test domain combinations meaningful for the same identities.
     """
     import os
     IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
     samples = []
     ids = set()
 
-    # Parse Scanner Data -> Domain: "scanner"
     scanner_dir = os.path.join(data_root, "scanner_roi")
     if os.path.isdir(scanner_dir):
         for subj_folder in sorted(os.listdir(scanner_dir)):
@@ -416,18 +446,19 @@ def scan_xpalm(data_root):
                 parts = os.path.splitext(fname)[0].split("_")
                 if len(parts) < 4:
                     continue
-                
+
                 hand = parts[1].lower()
+                domain = parts[2].lower()          # color: white/yellow/ir/...
                 identity = f"XPALM_{subj_id}_{hand}"
-                
+
                 samples.append({
                     "path": os.path.join(subj_dir, fname),
                     "identity": identity,
-                    "spectrum": "scanner"  # <-- Hardcoded domain
+                    "spectrum": domain,
+                    "device": "scanner",
                 })
                 ids.add(identity)
 
-    # Parse Smartphone Data -> Domain: "smartphone"
     phone_dir = os.path.join(data_root, "smartphone_roi")
     if os.path.isdir(phone_dir):
         for subj_folder in sorted(os.listdir(phone_dir)):
@@ -441,18 +472,22 @@ def scan_xpalm(data_root):
                 parts = os.path.splitext(fname)[0].split("_")
                 if len(parts) < 3:
                     continue
-                
+
                 hand = parts[1].lower()
+                cond = parts[2].lower()
+                domain = "rnd" if cond == "rnd" else cond   # collapse rnd_1..rnd_5
                 identity = f"XPALM_{subj_id}_{hand}"
-                
+
                 samples.append({
                     "path": os.path.join(subj_dir, fname),
                     "identity": identity,
-                    "spectrum": "smartphone"  # <-- Hardcoded domain
+                    "spectrum": domain,
+                    "device": "smartphone",
                 })
                 ids.add(identity)
 
     print(f"  [X-Palm] {len(samples)} samples, {len(ids)} identities from {data_root}")
+    print(f"  [X-Palm] domains found: {sorted(set(s['spectrum'] for s in samples))}")
     return samples
     
 # ========================================================
