@@ -6,6 +6,22 @@ import json
 
 from gabor import BASE_SCALE_LADDER
 
+'''
+### caisa-ms
+{"name": "Palm-JEPA (proposed)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3"]},
+
+### xjtu-up
+["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3",
+               "--gabor_orient", "12", "--gabor_gamma", "0.25",
+               "--gabor_num_scales", "5"]
+               
+'''
 
 
 # ─── Baseline specs for --run_all_baselines (used by ci_utils.py) ──────
@@ -24,11 +40,8 @@ BASELINE_SPECS = [
                "--num_blocks", "2"]},
     {"name": "Palm-JEPA (proposed)", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1",
-               "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
-               "--w_a2", "0.3",
-               "--gabor_orient", "12", "--gabor_gamma", "0.25",
-               "--gabor_num_scales", "5"]},
+               "--w_a2", "0.3"]},
 ]
 
 SHARED_ARG_NAMES = ["data_dir", "mode", "embed_dim", "num_patches", "epochs",
