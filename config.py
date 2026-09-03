@@ -36,6 +36,8 @@ BASELINE_SPECS = [
      "extra": []},
     {"key": "simsiam", "name": "SimSiam",              "script": "simsiam",
      "extra": []},
+    {"key": "byol", "name": "BYOL",                  "script": "byol",
+     "extra": []},
     {"key": "cjepa", "name": "C-JEPA",               "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "0",
                "--use_cjepa_reg", "1", "--cjepa_weight", "0.001",
@@ -305,6 +307,9 @@ def get_cfg(args=None):
     p.add_argument("--simsiam_script_path", type=str,
         default="simsiam-palm/main.py",
         help="Path to simsiam-palm's main.py. Only used with --run_all_baselines 1.")
+    p.add_argument("--byol_script_path", type=str,
+        default="byol-palm/main.py",
+        help="Path to byol-palm's main.py. Only used with --run_all_baselines 1.")
     p.add_argument("--combined_output_name", type=str, default=None,
         help="Filename (in --output_dir) for the combined comparison "
              "table. Defaults to 'ALL_BASELINES.txt'.")
