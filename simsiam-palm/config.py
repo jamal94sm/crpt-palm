@@ -45,21 +45,14 @@ def get_cfg(args=None):
              "are auto-derived from embed_dim, same formula as the proposed "
              "method's context/target encoders, so capacity matches 1:1.")
 
-    # ─── VICReg projector + loss ────────────────────────────────
+    # ─── SimSiam projector + loss ────────────────────────────────
     p.add_argument("--projector_hidden_dim", type=int, default=None,
         help="Expander hidden width. Defaults to embed_dim.")
     p.add_argument("--projector_out_dim", type=int, default=None,
         help="Expander output width. Defaults to embed_dim.")
-    p.add_argument("--vicreg_lambda_inv", type=float, default=25.0,
-        help="Invariance (MSE between the two views' projections) weight.")
-    p.add_argument("--vicreg_lambda_var", type=float, default=25.0,
-        help="Variance (hinge on per-dim std) weight.")
-    p.add_argument("--vicreg_lambda_cov", type=float, default=1.0,
-        help="Covariance (off-diagonal decorrelation) weight.")
-    p.add_argument("--vicreg_gamma", type=float, default=1.0,
-        help="Target per-dim std for the variance term.")
-    p.add_argument("--vicreg_eps", type=float, default=1e-4,
-        help="Numerical-stability epsilon inside the variance term's sqrt.")
+    parser.add_argument('--predictor_hidden_dim', type=int, default=None,
+        help="SimSiam predictor bottleneck dim. Defaults to embed_dim // 4 "
+             "(the 4x reduction used in the official SimSiam architecture).")
 
     # ─── Training ─────────────────────────────────────────────
     p.add_argument("--epochs", type=int, default=200)
