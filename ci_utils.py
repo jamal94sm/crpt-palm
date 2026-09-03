@@ -364,7 +364,17 @@ def run_all_baselines(cfg):
     force_rerun = bool(getattr(cfg, "force_rerun_baselines", 0))
     n_runs = int(getattr(cfg, "n_runs", 3))
 
-    for spec in BASELINE_SPECS:
+    selected = getattr(cfg, "baselines", None)
+    if selected:
+        specs_to_run = [s for s in BASELINE_SPECS if s["key"] in selected]
+        missing = set(selected) - {s["key"] for s in specs_to_run}
+        if missing:
+            raise SystemExit(f"Unknown --baselines key(s): {missing}. "
+                              f"Valid: {[s['key'] for s in BASELINE_SPECS]}")
+    else:
+        specs_to_run = BASELINE_SPECS
+
+    for spec in specs_to_run:
         out_name = (spec["name"].replace(" ", "_")
                     .replace("(", "").replace(")", "") + ".txt")
         out_file = os.path.join(cfg.output_dir, out_name)
