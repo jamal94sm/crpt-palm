@@ -1,99 +1,70 @@
-"""paired_dataset.py -- two-view dataset for VICReg, following the ORIGINAL
-VICReg two-branch augmentation recipe (asymmetric blur/solarization across
-the two views, as in facebookresearch/vicreg's augmentations.py), adapted
-only where the domain requires it:
-  - crop size = img_size (the original hardcodes 224 for ImageNet)
-  - crop scale = (0.7, 1.0) instead of the original's default (0.08, 1.0) --
-    an 8%-area crop destroys a 112x112 palmprint ROI; this matches the
-    crop strength CASIADataset's own augment=True branch already uses.
-  - normalization = [0.5]*3 / [0.5]*3, matching CASIADataset's eval-time
-    normalization elsewhere in this pipeline (not ImageNet stats).
+"""paired_dataset.py -- two-view dataset for SimSiam (Chen & He, CVPR 2021).
 
-Per-epoch TRAINING SIZE still matches the proposed method exactly: __len__
-is unchanged from CASIADataset, i.e. len(samples) * aug_multiplier (same
---aug_multiplier flag, same value, same config.py). Same number of dataset
-items per epoch -> same number of batches -> same number of optimizer steps
-per epoch. Each VICReg item just carries two views instead of one.
+SimSiam's official augmentation (matching the paper / facebookresearch/simsiam)
+is SYMMETRIC: the SAME transform pipeline is used for both views -- unlike
+VICReg's asymmetric blur/solarize split. No solarization at all here.
 
-dataset.py is untouched (a straight copy of crpt-palm's); this file only
-adds a new Dataset class on top of it.
+Crop scale (0.7, 1.0) instead of the paper's ImageNet default (0.2, 1.0) --
+same palmprint-specific adaptation used elsewhere in this project (an
+8%-area crop destroys a 112x112 palmprint ROI's ridge structure).
+
+dataset.py is untouched (shared, copied verbatim); this file only adds a
+dataset class on top of it.
 """
 
 import numpy as np
-from PIL import Image, ImageOps, ImageFilter
+from PIL import Image, ImageFilter
 from torchvision import transforms
 
 from dataset import CASIADataset
 
+_NORM_MEAN = [0.5, 0.5, 0.5]
+_NORM_STD = [0.5, 0.5, 0.5]
+
 
 class _GaussianBlur:
-    """PIL Gaussian blur, applied with probability p.
-    Matches facebookresearch/vicreg's augmentations.py GaussianBlur."""
-    def __init__(self, p):
+    """PIL Gaussian blur, applied with probability p. Sigma range matches
+    SimSiam's official recipe (same as MoCo v2 / SimCLR)."""
+    def __init__(self, p=0.5):
         self.p = p
 
     def __call__(self, img):
         if np.random.rand() < self.p:
-            sigma = np.random.rand() * 1.9 + 0.1
+            sigma = np.random.uniform(0.1, 2.0)
             return img.filter(ImageFilter.GaussianBlur(sigma))
         return img
 
 
-class _Solarization:
-    """PIL solarize, applied with probability p.
-    Matches facebookresearch/vicreg's augmentations.py Solarization."""
-    def __init__(self, p):
-        self.p = p
-
-    def __call__(self, img):
-        if np.random.rand() < self.p:
-            return ImageOps.solarize(img)
-        return img
-
-
-def _build_view_transform(img_size, blur_p, solarize_p):
-    """One branch of the original VICReg TrainTransform (crop/flip/jitter/
-    grayscale identical structure to the official recipe; crop size, crop
-    scale, and normalization adapted for this palmprint pipeline -- see
-    module docstring)."""
+def _build_view_transform(img_size):
     return transforms.Compose([
         transforms.RandomResizedCrop(img_size, scale=(0.7, 1.0)),
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomApply([
-            transforms.ColorJitter(brightness=0.4, contrast=0.4,
-                                    saturation=0.2, hue=0.1),
+            transforms.ColorJitter(0.4, 0.4, 0.4, 0.1),
         ], p=0.8),
         transforms.RandomGrayscale(p=0.2),
-        _GaussianBlur(p=blur_p),
-        _Solarization(p=solarize_p),
+        _GaussianBlur(p=0.5),
         transforms.ToTensor(),
-        transforms.Normalize([0.5] * 3, [0.5] * 3),
+        transforms.Normalize(_NORM_MEAN, _NORM_STD),
     ])
 
 
 class PairedCASIADataset(CASIADataset):
-    """Same samples / id_map / __len__ contract as CASIADataset, so
-    per-epoch training size still equals len(samples) * aug_multiplier --
-    identical to the proposed method's train_loader. __getitem__ returns
-    (view1, view2, label) using the ORIGINAL VICReg asymmetric recipe:
-    view1 is always blurred, never solarized; view2 is rarely blurred,
-    sometimes solarized. Crop/flip/jitter/grayscale are drawn independently
-    per branch but from the same distribution on both branches."""
+    """Same samples/id_map/__len__ contract as CASIADataset. __getitem__
+    returns (view1, view2, label) -- both from the SAME transform
+    pipeline (symmetric), two independent random draws."""
 
     def __init__(self, samples, id_map, img_size=112, augment=True,
                  aug_multiplier=1):
         super().__init__(samples, id_map, img_size, augment=augment,
                           aug_multiplier=aug_multiplier)
-        # Overwrite the single-view transform CASIADataset.__init__ built --
-        # VICReg uses its own two-branch recipe instead.
-        self.transform = _build_view_transform(img_size, blur_p=1.0, solarize_p=0.0)
-        self.transform_prime = _build_view_transform(img_size, blur_p=0.1, solarize_p=0.2)
+        self.transform = _build_view_transform(img_size)
 
     def __getitem__(self, idx):
         real_idx = idx % len(self.samples)
         s = self.samples[real_idx]
         img = Image.open(s["path"]).convert("RGB")
         view1 = self.transform(img)
-        view2 = self.transform_prime(img)
+        view2 = self.transform(img)
         label = self.id_map[s["identity"]]
         return view1, view2, label
