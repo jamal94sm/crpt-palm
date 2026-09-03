@@ -148,6 +148,7 @@ def train_simsiam(cfg, train_loader, eval_dict, out_path):
     train_loader = build_paired_train_loader(cfg, train_loader)
 
     init_lr = cfg.base_lr * cfg.batch_size / 256
+    total_steps = cfg.epochs * len(train_loader)   # for the printed step count only
 
     if bool(getattr(cfg, "fix_pred_lr", 1)):
         param_groups = [
