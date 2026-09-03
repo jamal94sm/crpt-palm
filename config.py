@@ -26,21 +26,21 @@ from gabor import BASE_SCALE_LADDER
 
 # ─── Baseline specs for --run_all_baselines (used by ci_utils.py) ──────
 BASELINE_SPECS = [
-    {"name": "ViT-supervised",       "script": "self",
+    {"key": "vit_sup", "name": "ViT-supervised",       "script": "self",
      "extra": ["--method", "vit_sup"]},
-    {"name": "CompNet-supervised",   "script": "self",
+    {"key": "compnet", "name": "CompNet-supervised",   "script": "self",
      "extra": ["--method", "compnet"]},
-    {"name": "JEPA",                 "script": "self",
+    {"key": "jepa", "name": "JEPA",                 "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "0"]},
-    {"name": "VICReg",               "script": "vicreg",
+    {"key": "vicreg", "name": "VICReg",               "script": "vicreg",
      "extra": []},
-    {"name": "SimSiam",              "script": "simsiam",
+    {"key": "simsiam", "name": "SimSiam",              "script": "simsiam",
      "extra": []},
-    {"name": "C-JEPA",               "script": "self",
+    {"key": "cjepa", "name": "C-JEPA",               "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "0",
                "--use_cjepa_reg", "1", "--cjepa_weight", "0.001",
                "--num_blocks", "2"]},
-    {"name": "Palm-JEPA (proposed)", "script": "self",
+    {"key": "palmjepa", "name": "Palm-JEPA (proposed)", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1",
                "--struct_mode", "a2", "--struct_loss", "infonce",
                "--w_a2", "0.3"]},
@@ -308,6 +308,9 @@ def get_cfg(args=None):
     p.add_argument("--combined_output_name", type=str, default=None,
         help="Filename (in --output_dir) for the combined comparison "
              "table. Defaults to 'ALL_BASELINES.txt'.")
+    p.add_argument("--baselines", nargs="*", default=None,
+        help="Subset of baselines to run, by key. Default: None = run ALL. "
+             "Keys: vit_sup, compnet, jepa, vicreg, simsiam, cjepa, palmjepa.")
     p.add_argument("--force_rerun_baselines", type=int, default=0, choices=[0, 1],
         help="1 = re-run every baseline even if its output file already "
              "has a complete SUMMARY_CSV block from a prior run. "
