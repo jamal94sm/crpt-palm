@@ -100,6 +100,13 @@ def get_cfg(args=None):
     p.add_argument("--n_runs", type=int, default=3)
     p.add_argument("--ci_level", type=float, default=0.95)
     p.add_argument("--output_name", type=str, default=None)
+    p.add_argument("--predictor_hidden_dim", type=int, default=None,
+        help="BYOL online predictor bottleneck dim. Defaults to embed_dim // 4.")
+    p.add_argument("--ema_start", type=float, default=0.996,
+        help="BYOL target-network momentum at step 0 (paper default).")
+    p.add_argument("--ema_end", type=float, default=1.0,
+        help="BYOL target-network momentum at the final step (paper uses "
+             "a cosine schedule up to 1.0).")
     p.add_argument("--use_cross_dataset_eval", type=int, default=0, choices=[0, 1])
     p.add_argument("--casia_dir", type=str, default=None)
     p.add_argument("--xjtu_dir", type=str, default=None)
