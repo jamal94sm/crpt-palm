@@ -86,6 +86,26 @@ class Expander(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+class Predictor(nn.Module):
+    """SimSiam's prediction MLP h(): 2-layer bottleneck (BN+ReLU on the
+    hidden layer, no BN/activation on the output). This asymmetry -- one
+    branch goes through h(), the other doesn't, and the target branch is
+    stop-gradiented -- is SimSiam's entire collapse-prevention mechanism.
+    No EMA target, no negative pairs, no variance/covariance term."""
+
+    def __init__(self, in_dim, hidden_dim=None):
+        super().__init__()
+        hidden_dim = hidden_dim or max(in_dim // 4, 1)
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, in_dim),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+        
 
 class FeatureExtractor(nn.Module):
     """Wraps the encoder for eval: mean-pool over patch tokens.
