@@ -34,6 +34,8 @@ BASELINE_SPECS = [
      "extra": ["--method", "jepa", "--use_corruption", "0"]},
     {"name": "VICReg",               "script": "vicreg",
      "extra": []},
+    {"name": "SimSiam",              "script": "simsiam",
+     "extra": []},
     {"name": "C-JEPA",               "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "0",
                "--use_cjepa_reg", "1", "--cjepa_weight", "0.001",
