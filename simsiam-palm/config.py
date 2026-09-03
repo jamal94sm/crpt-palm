@@ -53,6 +53,19 @@ def get_cfg(args=None):
     p.add_argument('--predictor_hidden_dim', type=int, default=None,
         help="SimSiam predictor bottleneck dim. Defaults to embed_dim // 4 "
              "(the 4x reduction used in the official SimSiam architecture).")
+    
+    p.add_argument('--base_lr', type=float, default=0.05,
+        help="Official SimSiam base LR (paper Sec 4.1). Effective LR after "
+             "linear scaling = base_lr * batch_size / 256.")
+    p.add_argument('--sgd_momentum', type=float, default=0.9)
+    p.add_argument('--sgd_weight_decay', type=float, default=1e-4,
+        help="Official SimSiam weight decay. Distinct from --weight_decay "
+             "(the AdamW-convention flag other baselines in this project "
+             "share).")
+    p.add_argument('--fix_pred_lr', type=int, default=1, choices=[0, 1],
+        help="1 (paper Sec 4.2 / official default) = predictor's LR stays "
+             "FIXED at base_lr and does not follow the cosine decay applied "
+             "to the encoder+projector.")
 
     # ─── Training ─────────────────────────────────────────────
     p.add_argument("--epochs", type=int, default=200)
