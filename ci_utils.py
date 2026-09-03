@@ -380,10 +380,15 @@ def run_all_baselines(cfg):
             cmd = [sys.executable, self_main] + shared + spec["extra"] + \
                   ["--output_name", out_name]
             cwd = here
-        else:
+        elif spec["script"] == "vicreg":
             cmd = [sys.executable, vicreg_main] + shared + spec["extra"] + \
                   ["--output_name", out_name]
             cwd = os.path.dirname(vicreg_main)
+        elif spec["script"] == "simsiam":
+            simsiam_main = os.path.abspath(os.path.join(here, cfg.simsiam_script_path))
+            cmd = [sys.executable, simsiam_main] + shared + spec["extra"] + \
+                  ["--output_name", out_name]
+            cwd = os.path.dirname(simsiam_main)
 
         print(f"\n{'#'*80}\n  BASELINE: {spec['name']}")
         print(f"  CMD: {' '.join(cmd)}\n{'#'*80}\n")
