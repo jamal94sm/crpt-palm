@@ -91,6 +91,11 @@ def get_cfg(args=None):
     p.add_argument("--n_runs", type=int, default=3)
     p.add_argument("--ci_level", type=float, default=0.95)
     p.add_argument("--output_name", type=str, default=None)
+    p.add_argument("--use_cross_dataset_eval", type=int, default=0, choices=[0, 1])
+    p.add_argument("--casia_dir", type=str, default=None)
+    p.add_argument("--xjtu_dir", type=str, default=None)
+    p.add_argument("--xpalm_dir", type=str, default=None)
+    p.add_argument("--test_spectrums", nargs="*", default=None)
 
 
     cfg = p.parse_args(args)
