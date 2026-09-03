@@ -103,3 +103,36 @@ class FeatureExtractor(nn.Module):
     def forward(self, x):
         z = self.encoder(x)
         return z.mean(dim=1)
+
+
+class Predictor(nn.Module):
+    """BYOL online predictor q_theta: 2-layer bottleneck MLP (BN+ReLU
+    hidden, plain Linear output). Only the ONLINE network has a
+    predictor -- the target network does not."""
+
+    def __init__(self, in_dim, hidden_dim=None):
+        super().__init__()
+        hidden_dim = hidden_dim or max(in_dim // 4, 1)
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, in_dim),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+@torch.no_grad()
+def update_ema(online_encoder, target_encoder, online_expander, target_expander, momentum):
+    """EMA update for BOTH encoder AND projector -- BYOL's target network
+    is a momentum copy of the entire online encoder+projector stack, not
+    just the encoder (unlike this project's own JEPA context/target pair,
+    which only EMAs the encoder)."""
+    for po, pt in zip(online_encoder.parameters(), target_encoder.parameters()):
+        pt.data.mul_(momentum).add_(po.data * (1.0 - momentum))
+    for po, pt in zip(online_expander.parameters(), target_expander.parameters()):
+        pt.data.mul_(momentum).add_(po.data * (1.0 - momentum))
+
+
