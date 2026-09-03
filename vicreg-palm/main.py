@@ -25,6 +25,50 @@ from models import Encoder, Expander, FeatureExtractor
 from vicreg_loss import vicreg_loss
 from evaluate import run_full_eval
 
+def exclude_bias_and_norm(p):
+    """Official filter (facebookresearch/vicreg main_vicreg.py, fetched and
+    verified): skip weight decay AND LARS trust-ratio adaptation for any
+    1D parameter (biases, LayerNorm/BatchNorm gain+bias)."""
+    return p.ndim == 1
+
+
+class LARS(torch.optim.Optimizer):
+    """LARS optimizer, verbatim from facebookresearch/vicreg's
+    main_vicreg.py. No distributed-specific code needed -- the class
+    itself has zero dependency on multi-GPU state in the official source."""
+
+    def __init__(self, params, lr, weight_decay=0, momentum=0.9, eta=0.001,
+                 weight_decay_filter=None, lars_adaptation_filter=None):
+        defaults = dict(lr=lr, weight_decay=weight_decay, momentum=momentum, eta=eta,
+                         weight_decay_filter=weight_decay_filter,
+                         lars_adaptation_filter=lars_adaptation_filter)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self):
+        for g in self.param_groups:
+            for p in g["params"]:
+                dp = p.grad
+                if dp is None:
+                    continue
+                if g["weight_decay_filter"] is None or not g["weight_decay_filter"](p):
+                    dp = dp.add(p, alpha=g["weight_decay"])
+                if g["lars_adaptation_filter"] is None or not g["lars_adaptation_filter"](p):
+                    param_norm = torch.norm(p)
+                    update_norm = torch.norm(dp)
+                    one = torch.ones_like(param_norm)
+                    q = torch.where(
+                        param_norm > 0.0,
+                        torch.where(update_norm > 0, (g["eta"] * param_norm / update_norm), one),
+                        one,
+                    )
+                    dp = dp.mul(q)
+                param_state = self.state[p]
+                if "mu" not in param_state:
+                    param_state["mu"] = torch.zeros_like(p)
+                mu = param_state["mu"]
+                mu.mul_(g["momentum"]).add_(dp)
+                p.add_(mu, alpha=-g["lr"])
 
 def set_seed(seed):
     random.seed(seed)
@@ -146,21 +190,30 @@ def train_vicreg(cfg, train_loader, eval_dict, out_path):
     train_loader = build_paired_train_loader(cfg, train_loader)
 
     train_params = list(encoder.parameters()) + list(expander.parameters())
-    opt = torch.optim.AdamW(train_params, lr=cfg.learning_rate,
-                             weight_decay=cfg.weight_decay)
+    opt = LARS(train_params, lr=0, weight_decay=cfg.lars_wd,
+               momentum=cfg.lars_momentum, eta=cfg.lars_eta,
+               weight_decay_filter=exclude_bias_and_norm,
+               lars_adaptation_filter=exclude_bias_and_norm)
     total_steps = cfg.epochs * len(train_loader)
+    warmup_steps = 10 * len(train_loader)     # official: fixed 10 epochs
+    base_lr = cfg.base_lr * cfg.batch_size / 256
 
-    def lr_lambda(step):
-        warmup_steps = int(cfg.warmup_ratio * total_steps)
+    def adjust_lr(step):
+        """Verbatim reproduction of facebookresearch/vicreg's
+        adjust_learning_rate(): linear warmup, then cosine decay to a
+        NONZERO floor (end_lr = base_lr * 0.001)."""
         if step < warmup_steps:
-            return cfg.start_lr / cfg.learning_rate + \
-                (1 - cfg.start_lr / cfg.learning_rate) * step / warmup_steps
-        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-        return cfg.final_lr / cfg.learning_rate + \
-            (1 - cfg.final_lr / cfg.learning_rate) * \
-            0.5 * (1 + math.cos(math.pi * progress))
+            lr = base_lr * step / warmup_steps
+        else:
+            s = step - warmup_steps
+            m = total_steps - warmup_steps
+            q = 0.5 * (1 + math.cos(math.pi * s / m))
+            end_lr = base_lr * 0.001
+            lr = base_lr * q + end_lr * (1 - q)
+        for pg in opt.param_groups:
+            pg["lr"] = lr
+        return lr
 
-    scheduler = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
     feature_extractor = FeatureExtractor(encoder)
 
     print(f"\n{'─'*70}\n Training VICReg ({total_steps} steps)\n{'─'*70}")
@@ -168,13 +221,14 @@ def train_vicreg(cfg, train_loader, eval_dict, out_path):
     eval_history = []
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
 
+    global_step = 0
     for epoch in range(1, cfg.epochs + 1):
         encoder.train()
         expander.train()
 
         ep_loss = ep_inv = ep_var = ep_cov = 0.0
         n_bat = 0
-        t0 = __import__("time").time()
+        t0 = time.time()
 
         for view1, view2, labels in train_loader:
             view1, view2 = view1.to(cfg.device), view2.to(cfg.device)
@@ -186,14 +240,15 @@ def train_vicreg(cfg, train_loader, eval_dict, out_path):
                 lambda_cov=cfg.vicreg_lambda_cov,
                 gamma=cfg.vicreg_gamma, eps=cfg.vicreg_eps)
 
+            adjust_lr(global_step)   # official order: lr set BEFORE zero_grad/backward
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
-            scheduler.step()
 
             ep_loss += loss.item(); ep_inv += stats_["inv"]
             ep_var += stats_["var"]; ep_cov += stats_["cov"]
             n_bat += 1
+            global_step += 1
 
         ep_loss /= max(n_bat, 1); ep_inv /= max(n_bat, 1)
         ep_var /= max(n_bat, 1); ep_cov /= max(n_bat, 1)
