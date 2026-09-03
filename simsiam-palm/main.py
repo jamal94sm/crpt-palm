@@ -147,23 +147,31 @@ def train_simsiam(cfg, train_loader, eval_dict, out_path):
 
     train_loader = build_paired_train_loader(cfg, train_loader)
 
-    train_params = (list(encoder.parameters()) + list(expander.parameters())
-                     + list(predictor.parameters()))
-    opt = torch.optim.AdamW(train_params, lr=cfg.learning_rate,
-                             weight_decay=cfg.weight_decay)
-    total_steps = cfg.epochs * len(train_loader)
+    init_lr = cfg.base_lr * cfg.batch_size / 256
 
-    def lr_lambda(step):
-        warmup_steps = int(cfg.warmup_ratio * total_steps)
-        if step < warmup_steps:
-            return cfg.start_lr / cfg.learning_rate + \
-                (1 - cfg.start_lr / cfg.learning_rate) * step / warmup_steps
-        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-        return cfg.final_lr / cfg.learning_rate + \
-            (1 - cfg.final_lr / cfg.learning_rate) * \
-            0.5 * (1 + math.cos(math.pi * progress))
+    if bool(getattr(cfg, "fix_pred_lr", 1)):
+        param_groups = [
+            {'params': list(encoder.parameters()) + list(expander.parameters())},
+            {'params': predictor.parameters(), 'fix_lr': True},
+        ]
+    else:
+        param_groups = (list(encoder.parameters()) + list(expander.parameters())
+                         + list(predictor.parameters()))
 
-    scheduler = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+    opt = torch.optim.SGD(param_groups, lr=init_lr,
+                           momentum=cfg.sgd_momentum,
+                           weight_decay=cfg.sgd_weight_decay)
+
+    def adjust_lr(epoch_idx):
+        """Official SimSiam schedule: pure cosine, NO warmup, stepped once
+        per EPOCH (not per training step). Predictor's group keeps a FIXED
+        lr when --fix_pred_lr 1 (paper Sec 4.2) -- this asymmetry is part
+        of SimSiam's own published recipe."""
+        cur_lr = init_lr * 0.5 * (1 + math.cos(math.pi * epoch_idx / cfg.epochs))
+        for pg in opt.param_groups:
+            pg['lr'] = init_lr if pg.get('fix_lr', False) else cur_lr
+        return cur_lr
+
     feature_extractor = FeatureExtractor(encoder)
 
     print(f"\n{'─'*70}\n Training SimSiam ({total_steps} steps)\n{'─'*70}")
@@ -172,6 +180,7 @@ def train_simsiam(cfg, train_loader, eval_dict, out_path):
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
 
     for epoch in range(1, cfg.epochs + 1):
+        cur_lr = adjust_lr(epoch - 1)   # once per epoch, matching official main_simsiam.py
         encoder.train()
         expander.train()
         predictor.train()
@@ -193,7 +202,6 @@ def train_simsiam(cfg, train_loader, eval_dict, out_path):
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
-            scheduler.step()
 
             ep_loss += loss.item()
             ep_sim += stats_["sim"]
