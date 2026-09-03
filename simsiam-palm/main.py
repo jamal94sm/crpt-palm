@@ -20,7 +20,10 @@ from torch.utils.data import DataLoader
 from scipy import stats
 
 from config import get_cfg
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dataset import build_datasets, build_cross_dataset_eval_dict
+
 from paired_dataset import PairedCASIADataset
 from models import Encoder, Expander, Predictor, FeatureExtractor
 from simsiam_loss import simsiam_loss
