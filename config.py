@@ -299,10 +299,9 @@ def get_cfg(args=None):
              "--mode, --train_spectrums, --epochs, --batch_size, etc.), "
              "each with --use_CI 1 --n_runs N. Writes each baseline's own "
              "output file plus one combined comparison table.")
-    p.add_argument("--vicreg_script_path", type=str,
-        default="vicreg-palm/main.py",
-        help="Path to vicreg_palm's main.py (relative to this file's "
-             "directory, or absolute). Only used with --run_all_baselines 1.")
+    p.add_argument("--simsiam_script_path", type=str,
+        default="simsiam-palm/main.py",
+        help="Path to simsiam-palm's main.py. Only used with --run_all_baselines 1.")
     p.add_argument("--combined_output_name", type=str, default=None,
         help="Filename (in --output_dir) for the combined comparison "
              "table. Defaults to 'ALL_BASELINES.txt'.")
