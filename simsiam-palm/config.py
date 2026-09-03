@@ -50,7 +50,7 @@ def get_cfg(args=None):
         help="Expander hidden width. Defaults to embed_dim.")
     p.add_argument("--projector_out_dim", type=int, default=None,
         help="Expander output width. Defaults to embed_dim.")
-    parser.add_argument('--predictor_hidden_dim', type=int, default=None,
+    p.add_argument('--predictor_hidden_dim', type=int, default=None,
         help="SimSiam predictor bottleneck dim. Defaults to embed_dim // 4 "
              "(the 4x reduction used in the official SimSiam architecture).")
 
