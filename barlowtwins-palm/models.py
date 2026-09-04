@@ -71,16 +71,18 @@ class Encoder(nn.Module):
 
 
 class Expander(nn.Module):
-    """3-layer MLP projector, as in the VICReg paper."""
+    """Official Barlow Twins projector: 2x[Linear(bias=False)->BN->ReLU]
+    + final Linear(bias=False) with NO BN/ReLU on the output -- verified
+    against facebookresearch/barlowtwins/main.py."""
 
     def __init__(self, in_dim, hidden_dim=None, out_dim=None):
         super().__init__()
         hidden_dim = hidden_dim or in_dim
         out_dim = out_dim or in_dim
         self.net = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim, out_dim),
+            nn.Linear(in_dim, hidden_dim, bias=False), nn.BatchNorm1d(hidden_dim), nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, hidden_dim, bias=False), nn.BatchNorm1d(hidden_dim), nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, out_dim, bias=False),
         )
 
     def forward(self, x):
