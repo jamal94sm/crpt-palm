@@ -61,6 +61,21 @@ def get_cfg(args=None):
     p.add_argument("--vicreg_eps", type=float, default=1e-4,
         help="Numerical-stability epsilon inside the variance term's sqrt.")
 
+    p.add_argument('--base_lr', type=float, default=0.2,
+        help="Official VICReg base LR (main_vicreg.py, verified). Effective "
+             "LR after a 10-epoch warmup = base_lr * batch_size / 256, "
+             "then cosine decay to a floor of base_lr * 0.001 (not zero) "
+             "-- both details are exact reproductions of the official "
+             "adjust_learning_rate().")
+    p.add_argument('--lars_wd', type=float, default=1e-6,
+        help="Official VICReg weight decay for LARS. Distinct from "
+             "--weight_decay (the AdamW-convention flag other baselines "
+             "in this project share) since LARS operates on a different "
+             "numeric scale.")
+    p.add_argument('--lars_momentum', type=float, default=0.9)
+    p.add_argument('--lars_eta', type=float, default=0.001,
+        help="LARS trust-ratio coefficient (official default).")
+
     # ─── Training ─────────────────────────────────────────────
     p.add_argument("--epochs", type=int, default=200)
     p.add_argument("--batch_size", type=int, default=64)
@@ -85,6 +100,11 @@ def get_cfg(args=None):
     p.add_argument("--n_runs", type=int, default=3)
     p.add_argument("--ci_level", type=float, default=0.95)
     p.add_argument("--output_name", type=str, default=None)
+    p.add_argument("--use_cross_dataset_eval", type=int, default=0, choices=[0, 1])
+    p.add_argument("--casia_dir", type=str, default=None)
+    p.add_argument("--xjtu_dir", type=str, default=None)
+    p.add_argument("--xpalm_dir", type=str, default=None)
+    p.add_argument("--test_spectrums", nargs="*", default=None)
 
 
     cfg = p.parse_args(args)
