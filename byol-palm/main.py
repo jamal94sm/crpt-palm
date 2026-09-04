@@ -27,6 +27,54 @@ from byol_loss import byol_loss
 from evaluate import run_full_eval
 
 
+def exclude_bias_and_norm(p):
+    """Official filter (facebookresearch/vicreg, structurally identical to
+    DeepMind's own byol/utils/optimizers.py): skip weight decay and LARS
+    trust-ratio adaptation for any 1D parameter (biases, LayerNorm/
+    BatchNorm gain+bias)."""
+    return p.ndim == 1
+
+
+class LARS(torch.optim.Optimizer):
+    """LARS optimizer -- verified against facebookresearch/vicreg's
+    main_vicreg.py, structurally identical to BYOL's own official
+    optimizers.lars (same exclude_bias_and_norm filter, same trust-ratio
+    mechanism)."""
+
+    def __init__(self, params, lr, weight_decay=0, momentum=0.9, eta=0.001,
+                 weight_decay_filter=None, lars_adaptation_filter=None):
+        defaults = dict(lr=lr, weight_decay=weight_decay, momentum=momentum, eta=eta,
+                         weight_decay_filter=weight_decay_filter,
+                         lars_adaptation_filter=lars_adaptation_filter)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self):
+        for g in self.param_groups:
+            for p in g["params"]:
+                dp = p.grad
+                if dp is None:
+                    continue
+                if g["weight_decay_filter"] is None or not g["weight_decay_filter"](p):
+                    dp = dp.add(p, alpha=g["weight_decay"])
+                if g["lars_adaptation_filter"] is None or not g["lars_adaptation_filter"](p):
+                    param_norm = torch.norm(p)
+                    update_norm = torch.norm(dp)
+                    one = torch.ones_like(param_norm)
+                    q = torch.where(
+                        param_norm > 0.0,
+                        torch.where(update_norm > 0, (g["eta"] * param_norm / update_norm), one),
+                        one,
+                    )
+                    dp = dp.mul(q)
+                param_state = self.state[p]
+                if "mu" not in param_state:
+                    param_state["mu"] = torch.zeros_like(p)
+                mu = param_state["mu"]
+                mu.mul_(g["momentum"]).add_(dp)
+                p.add_(mu, alpha=-g["lr"])
+
+
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -127,13 +175,24 @@ def build_paired_train_loader(cfg, train_loader):
 
 def train_byol(cfg, train_loader, eval_dict, out_path):
     print(f"\n Building BYOL online + target networks...")
+    # Resolve projector/predictor sizing relative to embed_dim, not the
+    # paper's fixed 4096/256 (sized for a 2048-dim ResNet-50). Ratio
+    # matches smaller-backbone BYOL ports: hidden ~= encoder_dim,
+    # projection ~= encoder_dim / 4.
+    proj_hidden_dim = cfg.projector_hidden_dim or cfg.embed_dim
+    pred_hidden_dim = cfg.predictor_hidden_dim or cfg.embed_dim
+    proj_dim = cfg.projector_out_dim or max(cfg.embed_dim // 4, 32)
+    print(f" BYOL projector/predictor sizing: embed_dim={cfg.embed_dim} -> "
+          f"proj_hidden={proj_hidden_dim} pred_hidden={pred_hidden_dim} "
+          f"proj_dim={proj_dim}  (official paper: hidden=4096, proj=256, "
+          f"for a 2048-dim ResNet-50 -- inappropriate here)")
+
     online_encoder = Encoder((cfg.img_size, cfg.img_size), cfg.num_patches, cfg.embed_dim).to(cfg.device)
-    online_expander = Expander(cfg.embed_dim, cfg.projector_hidden_dim, cfg.projector_out_dim).to(cfg.device)
-    proj_dim = cfg.projector_out_dim or cfg.embed_dim
-    predictor = Predictor(proj_dim, cfg.predictor_hidden_dim).to(cfg.device)
+    online_expander = Expander(cfg.embed_dim, proj_hidden_dim, proj_dim).to(cfg.device)
+    predictor = Predictor(proj_dim, pred_hidden_dim).to(cfg.device)
 
     target_encoder = Encoder((cfg.img_size, cfg.img_size), cfg.num_patches, cfg.embed_dim).to(cfg.device)
-    target_expander = Expander(cfg.embed_dim, cfg.projector_hidden_dim, cfg.projector_out_dim).to(cfg.device)
+    target_expander = Expander(cfg.embed_dim, proj_hidden_dim, proj_dim).to(cfg.device)
 
     for po, pt in zip(online_encoder.parameters(), target_encoder.parameters()):
         pt.data.copy_(po.data)
@@ -156,23 +215,32 @@ def train_byol(cfg, train_loader, eval_dict, out_path):
 
     train_params = (list(online_encoder.parameters()) + list(online_expander.parameters())
                      + list(predictor.parameters()))
-    opt = torch.optim.AdamW(train_params, lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
+    opt = LARS(train_params, lr=0, weight_decay=cfg.lars_wd,
+               momentum=cfg.lars_momentum, eta=cfg.lars_eta,
+               weight_decay_filter=exclude_bias_and_norm,
+               lars_adaptation_filter=exclude_bias_and_norm)
     total_steps = cfg.epochs * len(train_loader)
+    warmup_steps = 10 * len(train_loader)     # official: fixed 10 epochs
+    base_lr = cfg.base_lr * cfg.batch_size / 256
 
-    def lr_lambda(step):
-        warmup_steps = int(cfg.warmup_ratio * total_steps)
+    def adjust_lr(step):
+        """Official BYOL schedule (paper Appendix J): linear warmup, then
+        cosine decay. NOTE: BYOL's own appendix doesn't specify a nonzero
+        floor (unlike VICReg's confirmed end_lr=base_lr*0.001) -- this
+        decays to zero, the standard reading, not independently confirmed
+        against the literal schedules.py source."""
         if step < warmup_steps:
-            return cfg.start_lr / cfg.learning_rate + \
-                (1 - cfg.start_lr / cfg.learning_rate) * step / warmup_steps
-        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-        return cfg.final_lr / cfg.learning_rate + \
-            (1 - cfg.final_lr / cfg.learning_rate) * \
-            0.5 * (1 + math.cos(math.pi * progress))
-
-    scheduler = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+            return base_lr * step / warmup_steps
+        s = step - warmup_steps
+        m = total_steps - warmup_steps
+        return base_lr * 0.5 * (1 + math.cos(math.pi * s / m))
 
     def get_momentum(step):
-        return cfg.ema_start + (cfg.ema_end - cfg.ema_start) * step / max(1, total_steps)
+        """Official BYOL target-EMA cosine schedule (paper Appendix J,
+        formula corroborated by citing literature attributing it to
+        Grill et al. 2020) -- NOT linear."""
+        progress = step / max(1, total_steps)
+        return cfg.ema_end - (cfg.ema_end - cfg.ema_start) * (math.cos(math.pi * progress) + 1) / 2
 
     feature_extractor = FeatureExtractor(online_encoder)
 
@@ -206,10 +274,12 @@ def train_byol(cfg, train_loader, eval_dict, out_path):
 
             loss, stats_ = byol_loss(p1, z2, p2, z1)
 
+            lr = adjust_lr(global_step)
+            for pg in opt.param_groups:
+                pg["lr"] = lr
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
-            scheduler.step()
 
             momentum = get_momentum(global_step)
             update_ema(online_encoder, target_encoder, online_expander, target_expander, momentum)
