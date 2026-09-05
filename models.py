@@ -393,6 +393,90 @@ class Predictor(nn.Module):
         return self.out_proj(preds)
 
 
+
+class StructurePredictor(nn.Module):
+    """Standalone, single-task predictor for the A2 structure branch --
+    used only when --use_shared_predictor_trunk 0. Architecturally
+    parallel to Predictor's structure-only path (same in_proj / mask
+    token+position-embedding / transformer trunk / output-projection
+    mechanism, same fixed-internals convention: pred_dim=128, depth=6,
+    num_heads=2, so capacity is matched 1:1 against the shared-trunk
+    Predictor's structure path) but with NO task token and NO appearance
+    branch at all: every parameter here (in_proj, mask_token, pos_embed,
+    encoder, norm, out_proj_struct) is independent of Predictor's own
+    weights. The only thing the two branches still share is their INPUT
+    (ctx_embeds from the same ContextEncoder) -- no computation or
+    gradient is shared inside the predictor stage itself.
+    """
+
+    def __init__(self, num_patches, embed_dim, norm_struct_out=True):
+        super().__init__()
+
+        pred_dim = 128
+        depth = 6
+        num_heads = 2
+        mlp_ratio = 4.0
+
+        self.in_proj = nn.Linear(embed_dim, pred_dim)
+
+        if norm_struct_out:
+            self.out_proj_struct = nn.Sequential(
+                nn.Linear(pred_dim, embed_dim),
+                nn.LayerNorm(embed_dim),
+            )
+        else:
+            self.out_proj_struct = nn.Linear(pred_dim, embed_dim)
+
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, pred_dim))
+
+        pos = get_2d_sincos_pos_embed(pred_dim, num_patches)
+        self.pos_embed = nn.Parameter(
+            torch.tensor(pos).float().unsqueeze(0),
+            requires_grad=False,
+        )
+
+        enc = nn.TransformerEncoderLayer(
+            d_model=pred_dim,
+            nhead=num_heads,
+            dim_feedforward=int(pred_dim * mlp_ratio),
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(enc, depth)
+        self.norm = nn.LayerNorm(pred_dim)
+
+    def forward(self, context, context_masks, target_masks):
+        """Same input contract as Predictor.forward(..., predict_structure=True),
+        but returns ONLY the structure prediction -- no appearance mask
+        token is ever built, so there's no wasted computation on an
+        appearance branch this trunk will never be scored on."""
+        if not isinstance(context_masks, list):
+            context_masks = [context_masks]
+        if not isinstance(target_masks, list):
+            target_masks = [target_masks]
+
+        n_ctx = len(context_masks)
+        n_tgt = len(target_masks)
+        B = context.size(0) // n_ctx
+        N_tgt = target_masks[0].size(1)
+
+        x = self.in_proj(context)
+
+        pos_full = self.pos_embed.expand(B, -1, -1)
+        pos_ctx = torch.cat([_gather(pos_full, m) for m in context_masks], dim=0)
+        x = x + pos_ctx
+
+        pos_tgt = torch.cat([_gather(pos_full, m) for m in target_masks], dim=0)
+        mask_struct = self.mask_token.expand(pos_tgt.size(0), N_tgt, -1) + pos_tgt
+
+        x = x.repeat(n_tgt, 1, 1)
+        x = torch.cat([x, mask_struct], dim=1)
+
+        x = self.encoder(x)
+        x = self.norm(x)
+
+        return self.out_proj_struct(x[:, -N_tgt:])
+        
 # ══════════════════════════════════════════════════════════════
 #  Feature Extractor (for evaluation)
 # ══════════════════════════════════════════════════════════════
