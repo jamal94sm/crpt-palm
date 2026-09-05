@@ -56,6 +56,7 @@ import torch.nn.functional as F
 from config import get_cfg
 from dataset import build_datasets, build_cross_dataset_eval_dict
 from models import (ContextEncoder, TargetEncoder, Predictor,
+                    StructurePredictor,
                     FeatureExtractor, patchify, apply_masks,
                     repeat_interleave_batch, update_ema, CompNet, PlainViT,
                     FeatModule, StructureHead, UncertaintyWeighting)
@@ -219,7 +220,16 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     use_a1 = bool(getattr(cfg, "use_a1", False))
     use_a2 = bool(getattr(cfg, "use_a2", False))
     use_struct = use_a1 or use_a2
+    use_shared_predictor_trunk = bool(getattr(cfg, "use_shared_predictor_trunk", True))
     gabor_bank = struct_head = struct_head_a2 = task_weighter = None
+    predictor_structure = None
+
+    if use_a2 and not use_shared_predictor_trunk:
+        predictor_structure = StructurePredictor(
+            cfg.num_patches, cfg.embed_dim,
+            norm_struct_out=bool(cfg.norm_struct_out)).to(cfg.device)
+        n_pred_struct = sum(p.numel() for p in predictor_structure.parameters())
+        print(f"  Structure predictor (SEPARATE trunk): {n_pred_struct/1e6:.2f}M params")
 
     if use_struct:
         gabor_bank = GaborBank(
@@ -299,6 +309,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
           f"  C-JEPA: {'ON' if use_cjepa else 'OFF'}")
 
     train_params = list(context_encoder.parameters()) + list(predictor.parameters())
+    if predictor_structure is not None:
+        train_params += list(predictor_structure.parameters())
     if use_struct:
         train_params += list(struct_head.parameters())
         if struct_head_a2 is not struct_head:      # avoid double-registering
@@ -340,6 +352,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             sup_head.train()
         if cjepa_projector is not None:
             cjepa_projector.train()
+        if predictor_structure is not None:
+            predictor_structure.train()
 
         ep_loss = 0.0          # raw JEPA term only — comparable across runs
         ep_var = 0.0
@@ -381,12 +395,18 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                 tgt_embeds = repeat_interleave_batch(
                     tgt_embeds, B, repeat=len(ctx_masks))
 
-            # A2 requests the extra structure query from the shared predictor.
-            if use_a2:
+            # A2 queries either the shared predictor's second task token
+            # (use_shared_predictor_trunk=1) or a completely separate
+            # StructurePredictor (use_shared_predictor_trunk=0) -- in the
+            # latter case, appearance is a normal single-task forward pass.
+            struct_hidden = None
+            if use_a2 and use_shared_predictor_trunk:
                 pred_embeds, struct_hidden = predictor(
                     ctx_embeds, ctx_masks, tgt_masks, predict_structure=True)
             else:
                 pred_embeds = predictor(ctx_embeds, ctx_masks, tgt_masks)
+                if use_a2:
+                    struct_hidden = predictor_structure(ctx_embeds, ctx_masks, tgt_masks)
 
             loss_jepa = F.smooth_l1_loss(pred_embeds, tgt_embeds)
 
