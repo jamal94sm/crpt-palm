@@ -212,6 +212,13 @@ def get_cfg(args=None):
                    help="shared = one StructureHead for A1 and A2. "
                         "separate = independent heads (only differs from "
                         "'shared' when --struct_mode both).")
+    p.add_argument("--use_shared_predictor_trunk", type=int, default=1, choices=[0, 1],
+                  help="1 (default) = A1/A2 structure prediction shares the same "
+                       "predictor transformer trunk as appearance prediction (via a "
+                       "second task token). 0 = a completely separate, independently "
+                       "-weighted StructurePredictor handles A2, with no shared "
+                       "computation beyond ctx_embeds. Only meaningful when A2 is "
+                       "active (--struct_mode a2/both); ignored otherwise.")
     p.add_argument("--norm_struct_out", type=int, default=1, choices=[0, 1],
                    help="LayerNorm on the predictor's structure output "
                         "(out_proj_struct) so its distribution matches "
