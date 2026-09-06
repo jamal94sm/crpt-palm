@@ -224,6 +224,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     gabor_bank = struct_head = struct_head_a2 = task_weighter = None
     predictor_structure = None
 
+    print(f"  Predictor trunk mode: "
+          f"{'SHARED (A2 via 2nd task token)' if use_shared_predictor_trunk else 'SEPARATE'}")
     if use_a2 and not use_shared_predictor_trunk:
         predictor_structure = StructurePredictor(
             cfg.num_patches, cfg.embed_dim,
