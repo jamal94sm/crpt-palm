@@ -391,7 +391,9 @@ def run_all_baselines(cfg):
             continue
 
         if spec["script"] == "self":
-            cmd = [sys.executable, self_main] + shared + spec["extra"] + \
+            trunk_flag = ["--use_shared_predictor_trunk",
+                          str(int(getattr(cfg, "use_shared_predictor_trunk", 1)))]
+            cmd = [sys.executable, self_main] + shared + trunk_flag + spec["extra"] + \
                   ["--output_name", out_name]
             cwd = here
         elif spec["script"] == "vicreg":
