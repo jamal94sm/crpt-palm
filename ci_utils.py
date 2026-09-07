@@ -160,6 +160,9 @@ def _shared_flags(cfg):
         flags.append("--test_spectrums")
         flags += [str(s) for s in cfg.test_spectrums]
     flags += ["--use_shared_predictor_trunk", str(int(getattr(cfg, "use_shared_predictor_trunk", 1)))]
+    flags += ["--use_CI", "1", "--n_runs", str(getattr(cfg, "n_runs", 3)),
+              "--ci_level", str(getattr(cfg, "ci_level", 0.95)),
+              "--output_dir", os.path.abspath(cfg.output_dir)]
 
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
         flags += ["--use_cross_dataset_eval", "1"]
