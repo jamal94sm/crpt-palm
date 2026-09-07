@@ -43,11 +43,6 @@ def barlow_loss(z1, z2, bn, lambd, batch_size):
     loss = on_diag + lambd * off_diag
 
     with torch.no_grad():
-        # Report std on the BN-NORMALIZED embeddings (what the loss itself
-        # sees via bn(z1)/bn(z2)), not F.normalize(z1) -- these are
-        # different operations (per-sample L2 norm vs. per-dim batch
-        # statistics) and the mismatch was hiding what the loss actually
-        # operates on.
         bn_z1, bn_z2 = bn(z1), bn(z2)
         stats = {"on_diag": on_diag.item(), "off_diag": off_diag.item(),
                   "std_z1": bn_z1.std(dim=0).mean().item(),
