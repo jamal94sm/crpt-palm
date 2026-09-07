@@ -245,7 +245,7 @@ def train_barlowtwins(cfg, train_loader, eval_dict, out_path):
         expander.train()
         bn.train()
 
-        ep_loss = ep_ondiag = ep_offdiag = ep_std = 0.0
+        ep_loss = ep_ondiag = ep_offdiag = ep_offdiag_abs = ep_std = 0.0
         n_bat = 0
         t0 = time.time()
 
@@ -265,6 +265,7 @@ def train_barlowtwins(cfg, train_loader, eval_dict, out_path):
             ep_loss += loss.item()
             ep_ondiag += stats_["on_diag"]
             ep_offdiag += stats_["off_diag"]
+            ep_offdiag_abs += stats_["off_diag_mean_abs"]
             ep_std += 0.5 * (stats_["std_z1"] + stats_["std_z2"])
             n_bat += 1
             global_step += 1
@@ -272,6 +273,7 @@ def train_barlowtwins(cfg, train_loader, eval_dict, out_path):
         ep_loss /= max(n_bat, 1)
         ep_ondiag /= max(n_bat, 1)
         ep_offdiag /= max(n_bat, 1)
+        ep_offdiag_abs /= max(n_bat, 1)
         ep_std /= max(n_bat, 1)
         elapsed = time.time() - t0
 
@@ -280,6 +282,7 @@ def train_barlowtwins(cfg, train_loader, eval_dict, out_path):
             lr_b = opt.param_groups[1]["lr"]
             print(f" ep {epoch:03d}/{cfg.epochs} loss={ep_loss:.4f} "
                   f"on_diag={ep_ondiag:.4f} off_diag={ep_offdiag:.4f} "
+                  f"off_diag_mean_abs={ep_offdiag_abs:.4f} "
                   f"std={ep_std:.4f} lr_w={lr_w:.2e} lr_b={lr_b:.2e} [{elapsed:.1f}s]")
             if ep_std < 0.01:
                 print("      !! WARNING: std(z) near 0 -- possible collapse.")
