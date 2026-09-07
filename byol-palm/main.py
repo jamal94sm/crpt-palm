@@ -296,8 +296,10 @@ def train_byol(cfg, train_loader, eval_dict, out_path):
         elapsed = time.time() - t0
 
         if epoch % 5 == 0 or epoch == cfg.epochs or epoch == 1:
+            cur_lr = opt.param_groups[0]["lr"]
             print(f" ep {epoch:03d}/{cfg.epochs} loss={ep_loss:.4f} "
-                  f"sim={ep_sim:.4f} std={ep_std:.4f} mom={momentum:.4f} [{elapsed:.1f}s]")
+                  f"sim={ep_sim:.4f} std={ep_std:.4f} mom={momentum:.4f} "
+                  f"lr={cur_lr:.2e} [{elapsed:.1f}s]")
             if ep_std < 0.01:
                 print("      !! WARNING: std(z) near 0 -- possible collapse.")
 
