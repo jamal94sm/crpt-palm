@@ -48,9 +48,7 @@ BASELINE_SPECS = [
      "extra": ["--method", "jepa", "--use_corruption", "1",
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
-               "--w_a2", "0.3",
-               "--gabor_orient", "12", "--gabor_gamma", "0.25",
-               "--gabor_num_scales", "5"]},
+               "--w_a2", "0.3"]},
 ]
 
 SHARED_ARG_NAMES = ["data_dir", "mode", "embed_dim", "num_patches", "epochs",
