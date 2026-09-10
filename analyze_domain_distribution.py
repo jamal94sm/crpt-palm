@@ -51,18 +51,39 @@ from models import (ContextEncoder, TargetEncoder, Predictor,
 from evaluate import extract_features
 from torch.utils.data import DataLoader
 
+if XPALM_DEVICE_FILTER:
+    import dataset as _dataset_module
+    _original_scan_xpalm = _dataset_module.scan_xpalm
+
+    def _filtered_scan_xpalm(data_root):
+        samples = _original_scan_xpalm(data_root)
+        filtered = [s for s in samples if s.get("device") == XPALM_DEVICE_FILTER]
+        print(f"  [X-Palm] device filter='{XPALM_DEVICE_FILTER}': "
+              f"{len(filtered)}/{len(samples)} samples kept")
+        return filtered
+
+    _dataset_module.scan_xpalm = _filtered_scan_xpalm
+
+
+
 # ═══════════════════════════════════════════════════════════════
 #  PARAMETERS -- edit these, then just run the script directly
 # ═══════════════════════════════════════════════════════════════
 
-DATA_DIR = "/home/pai-ng/Jamal/CASIA-MS-ROI"
-TRAIN_SPECTRUMS = ["WHT"]
-TEST_SPECTRUMS = None            # None = every other domain
+DATA_DIR = "/home/pai-ng/Jamal/xpalm"
+TRAIN_SPECTRUMS = ["sf", "close", "jf", "fl", "bf", "rnd"]
+TEST_SPECTRUMS = None            # None = every other SMARTPHONE domain
+                                  # (scanner excluded via XPALM_DEVICE_FILTER below)
 MODE = "cross_domain_openset"
 
 CASIA_DIR = "/home/pai-ng/Jamal/CASIA-MS-ROI"
 XJTU_DIR = "/home/pai-ng/Jamal/XJTU-UP"
 XPALM_DIR = "/home/pai-ng/Jamal/xpalm"
+
+# X-Palm-specific: scan_xpalm() tags every sample with "device": "scanner"
+# or "smartphone" -- restrict to smartphone-only here (affects BOTH the
+# train/eval split via build_datasets AND the Option C t-SNE pool).
+XPALM_DEVICE_FILTER = "smartphone"   # "smartphone", "scanner", or None (both)
 
 # Any --method jepa flag combo works here -- plain JEPA for now.
 # To try Palm-JEPA instead, e.g.:
@@ -76,7 +97,7 @@ NUM_PATCHES = 8
 BATCH_SIZE = 64
 GALLERY_RATIO = 0.5
 
-OUTPUT_DIR = "./out_domain_analysis"
+OUTPUT_DIR = "./out_domain_analysis_xpalm"
 MAX_TSNE_POINTS = 3000
 REDUCTION_METHOD = "tsne"        # "tsne" or "umap"
 COLOR_BY = "spectrum"            # "spectrum" (fine domain) or "dataset"
