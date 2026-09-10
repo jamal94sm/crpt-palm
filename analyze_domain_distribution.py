@@ -48,7 +48,7 @@ from dataset import (build_datasets, split_gallery_probe, build_id_map,
 from models import (ContextEncoder, TargetEncoder, Predictor,
                      FeatureExtractor, patchify, apply_masks,
                      repeat_interleave_batch, update_ema)
-from evaluate import extract_features
+from evaluate import extract_features, run_full_eval
 from torch.utils.data import DataLoader
 
 
@@ -97,6 +97,7 @@ if XPALM_DEVICE_FILTER:
 METHOD_EXTRA_FLAGS = {"use_corruption": 0}
 
 EPOCHS = 200
+EVAL_EVERY = 20
 EMBED_DIM = 256
 NUM_PATCHES = 8
 BATCH_SIZE = 64
@@ -149,7 +150,7 @@ def build_cfg():
 #  Step 1: train a plain JEPA (stripped-down copy of train_jepa's core)
 # ═══════════════════════════════════════════════════════════════
 
-def train_plain_jepa(cfg, train_loader):
+def train_plain_jepa(cfg, train_loader, eval_dict):
     img_size = (cfg.img_size, cfg.img_size)
     print(f"\n Building JEPA (analysis run)...")
     context_encoder = ContextEncoder(img_size, cfg.num_patches, cfg.embed_dim).to(cfg.device)
@@ -182,6 +183,7 @@ def train_plain_jepa(cfg, train_loader):
         return cfg.ema_start + (cfg.ema_end - cfg.ema_start) * step / max(1, total_steps)
 
     print(f" Training ({total_steps} steps)...")
+    feature_extractor = FeatureExtractor(context_encoder)
     global_step = 0
     for epoch in range(1, cfg.epochs + 1):
         context_encoder.train()
@@ -222,6 +224,15 @@ def train_plain_jepa(cfg, train_loader):
 
         if epoch % 10 == 0 or epoch == cfg.epochs or epoch == 1:
             print(f"  ep {epoch:03d}/{cfg.epochs}  loss={ep_loss/max(n_bat,1):.4f}")
+
+        if epoch % EVAL_EVERY == 0 or epoch == cfg.epochs:
+            print(f"\n  ── Eval at epoch {epoch} ──")
+            context_encoder.eval()
+            eval_results = run_full_eval(feature_extractor, eval_dict, cfg, tag=f"[ep{epoch}] ")
+            mean_r1 = sum(r["rank1"] for r in eval_results.values()) / max(len(eval_results), 1)
+            mean_eer = sum(r["eer"] for r in eval_results.values()) / max(len(eval_results), 1)
+            print(f"    Summary: Mean R1={mean_r1:.2f}% | Mean EER={mean_eer:.2f}%\n")
+            context_encoder.train()
 
     context_encoder.eval()
     print(" Training complete.\n")
@@ -462,7 +473,7 @@ def main():
 
     train_loader, eval_dict, id_map, n_train_ids, train_id_map = build_datasets(cfg)
 
-    context_encoder = train_plain_jepa(cfg, train_loader)
+    context_encoder = train_plain_jepa(cfg, train_loader, eval_dict)
 
     build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map)
     build_option_c(cfg, context_encoder)
