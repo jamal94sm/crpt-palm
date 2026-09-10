@@ -51,18 +51,7 @@ from models import (ContextEncoder, TargetEncoder, Predictor,
 from evaluate import extract_features
 from torch.utils.data import DataLoader
 
-if XPALM_DEVICE_FILTER:
-    import dataset as _dataset_module
-    _original_scan_xpalm = _dataset_module.scan_xpalm
 
-    def _filtered_scan_xpalm(data_root):
-        samples = _original_scan_xpalm(data_root)
-        filtered = [s for s in samples if s.get("device") == XPALM_DEVICE_FILTER]
-        print(f"  [X-Palm] device filter='{XPALM_DEVICE_FILTER}': "
-              f"{len(filtered)}/{len(samples)} samples kept")
-        return filtered
-
-    _dataset_module.scan_xpalm = _filtered_scan_xpalm
 
 
 
@@ -84,6 +73,22 @@ XPALM_DIR = "/home/pai-ng/Jamal/xpalm"
 # or "smartphone" -- restrict to smartphone-only here (affects BOTH the
 # train/eval split via build_datasets AND the Option C t-SNE pool).
 XPALM_DEVICE_FILTER = "smartphone"   # "smartphone", "scanner", or None (both)
+
+if XPALM_DEVICE_FILTER:
+    import dataset as _dataset_module
+    _original_scan_xpalm = _dataset_module.scan_xpalm
+
+    def _filtered_scan_xpalm(data_root):
+        samples = _original_scan_xpalm(data_root)
+        filtered = [s for s in samples if s.get("device") == XPALM_DEVICE_FILTER]
+        print(f"  [X-Palm] device filter='{XPALM_DEVICE_FILTER}': "
+              f"{len(filtered)}/{len(samples)} samples kept")
+        return filtered
+
+    _dataset_module.scan_xpalm = _filtered_scan_xpalm
+  
+
+
 
 # Any --method jepa flag combo works here -- plain JEPA for now.
 # To try Palm-JEPA instead, e.g.:
