@@ -287,6 +287,11 @@ def build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map):
     gal, prb = split_gallery_probe(train_samples, train_id_map, cfg.gallery_ratio, cfg.seed)
     modes["seen_dom_seen_id"] = compute_genuine_impostor(
         feature_extractor, gal, prb, train_id_map, cfg)
+    _g1, _i1 = modes["seen_dom_seen_id"]
+    from evaluate import compute_eer
+    print(f"  [DIAG] seen_dom_seen_id: n_genuine={len(_g1)} n_impostor={len(_i1)} "
+          f"EER={compute_eer(_g1, _i1):.2f}%  "
+          f"mean_genuine={_g1.mean():.3f}  mean_impostor={_i1.mean():.3f}")
 
     # Modes 2-4: reuse build_datasets()'s own eval_dict split logic by
     # re-deriving gallery/probe SAMPLE LISTS the same way build_datasets
