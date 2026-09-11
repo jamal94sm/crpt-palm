@@ -96,7 +96,8 @@ if XPALM_DEVICE_FILTER:
 # To try Palm-JEPA instead, e.g.:
 #   METHOD_EXTRA_FLAGS = {"use_corruption": 1, "struct_mode": "a2",
 #                          "struct_loss": "infonce", "w_a2": 0.3}
-METHOD_EXTRA_FLAGS = {"use_corruption": 0}
+#METHOD_EXTRA_FLAGS = {"use_corruption": 0}
+ANALYSIS_METHOD = "compnet"      # "compnet" or "vit_sup"
 
 EPOCHS = 200
 EVAL_EVERY = 20
@@ -139,12 +140,10 @@ def build_cfg():
         "--seed", str(SEED),
         "--device", DEVICE,
         "--output_dir", OUTPUT_DIR,
-        "--method", "jepa",
+        "--method", ANALYSIS_METHOD,
     ]
     if TEST_SPECTRUMS:
         args += ["--test_spectrums", *TEST_SPECTRUMS]
-    for k, v in METHOD_EXTRA_FLAGS.items():
-        args += [f"--{k}", str(v)]
     return get_cfg(args)
 
 
@@ -497,8 +496,11 @@ def main():
 
     train_loader, eval_dict, id_map, n_train_ids, train_id_map = build_datasets(cfg)
 
-    context_encoder = train_plain_jepa(cfg, train_loader, eval_dict)
-    ckpt_path = os.path.join(OUTPUT_DIR, "context_encoder.pth")
+    train_fn = train_compnet if ANALYSIS_METHOD == "compnet" else train_vit_sup
+    print(f" Training supervised model: {ANALYSIS_METHOD}")
+    final_eval = train_fn(cfg, train_loader, eval_dict, n_train_ids, train_id_map)
+    context_encoder = final_eval["encoder"]   # confirm this key -- see note below
+    ckpt_path = os.path.join(OUTPUT_DIR, f"{ANALYSIS_METHOD}_encoder.pth")
     torch.save(context_encoder.state_dict(), ckpt_path)
     print(f" Saved checkpoint: {ckpt_path}")
   
