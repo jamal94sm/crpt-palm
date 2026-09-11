@@ -400,7 +400,6 @@ def compute_genuine_impostor(feature_extractor, gal_samples, prb_samples,
     rank1 = (predicted == prb_labels).float().mean().item() * 100
     return genuine, impostor, rank1
 
-
 def build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map):
     print(" ── Option B: genuine/impostor distributions ──")
     feature_extractor = context_encoder   # now already a feature_extractor, not a raw encoder
@@ -420,18 +419,9 @@ def build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map):
           f"EER={seen_eer:.2f}% | Gal={len(gal)} Prb={len(prb)}")
     modes["seen_dom_seen_id"] = (genuine, impostor)
 
-    # Modes 2-4: reuse build_datasets()'s own eval_dict split logic by
-    # re-deriving gallery/probe SAMPLE LISTS the same way build_datasets
-    # did internally -- eval_dict only exposes loaders, not raw samples,
-    # so we rebuild from the same eval_sets via the same split functions
-    # already used above (split_gallery_probe), keyed off eval_dict's own
-    # loaders is not possible (loaders don't expose .dataset.samples in a
-    # gallery/probe-separated form cleanly here), so instead we recompute
-    # genuine/impostor directly from eval_dict's existing loaders:
-    for name in ("seen_dom_unseen_id", "unseen_dom_seen_id", "unseen_dom_unseen_id"):
-        if name not in eval_dict:
-            print(f"   (skipping {name}: not present in eval_dict for this config)")
-            continue
+    # Mode 2: seen_dom_unseen_id -- reuses build_datasets()'s own eval_dict.
+    name = "seen_dom_unseen_id"
+    if name in eval_dict:
         ev = eval_dict[name]
         gal_feats, gal_labels = extract_features(feature_extractor, ev["gallery_loader"], cfg.device)
         prb_feats, prb_labels = extract_features(feature_extractor, ev["probe_loader"], cfg.device)
@@ -448,36 +438,28 @@ def build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map):
             if imp_mask.any():
                 impostor.extend(sims[imp_mask].tolist())
         modes[name] = (np.array(genuine), np.array(impostor))
+    else:
+        print(f"   (skipping {name}: not present in eval_dict for this config)")
 
-    # ─── Plot: 2x2 grid ───
-    fig, axes = plt.subplots(2, 2, figsize=(11, 9))
-    titles = {
-        "seen_dom_seen_id": "Seen-Domain / Seen-ID\n(training samples)",
-        "seen_dom_unseen_id": "Seen-Domain / Unseen-ID",
-        "unseen_dom_seen_id": "Unseen-Domain / Seen-ID",
-        "unseen_dom_unseen_id": "Unseen-Domain / Unseen-ID",
-    }
-    for ax, name in zip(axes.flat, titles.keys()):
+    # ─── Plot: 1x2 grid, no captions ───
+    fig, axes = plt.subplots(1, 2, figsize=(11, 5))
+    order = ["seen_dom_seen_id", "seen_dom_unseen_id"]
+    for ax, name in zip(axes, order):
         if name not in modes:
-            ax.set_title(f"{titles[name]}\n(not available)")
             ax.axis("off")
             continue
         genuine, impostor = modes[name]
         ax.hist(genuine, bins=40, alpha=0.6, density=True, label="Genuine", color="tab:green")
         ax.hist(impostor, bins=40, alpha=0.6, density=True, label="Impostor", color="tab:red")
-        ax.set_title(titles[name])
         ax.set_xlabel("Cosine similarity")
         ax.set_ylabel("Density")
         ax.legend()
 
-    fig.suptitle(f"Genuine vs. Impostor Similarity — trained on {cfg.data_dir} "
-                 f"({','.join(TRAIN_SPECTRUMS)})", fontsize=12)
     fig.tight_layout()
     out_path = os.path.join(OUTPUT_DIR, "option_b_genuine_impostor.png")
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
     print(f"  Saved: {out_path}")
-
 
 # ═══════════════════════════════════════════════════════════════
 #  Step 3 (Option C): t-SNE/UMAP colored by domain
