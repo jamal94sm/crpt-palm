@@ -418,6 +418,7 @@ def build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map):
     seen_eer = compute_eer(genuine, impostor)
     print(f"      [final] seen_dom_seen_id: R1={seen_r1:.2f}% | "
           f"EER={seen_eer:.2f}% | Gal={len(gal)} Prb={len(prb)}")
+    modes["seen_dom_seen_id"] = (genuine, impostor)
 
     # Modes 2-4: reuse build_datasets()'s own eval_dict split logic by
     # re-deriving gallery/probe SAMPLE LISTS the same way build_datasets
