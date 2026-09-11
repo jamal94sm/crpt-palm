@@ -223,9 +223,9 @@ def train_supervised(cfg, train_loader, eval_dict, n_train_ids):
             train_id_map_local = build_id_map(train_samples)
             gal, prb = split_gallery_probe(train_samples, train_id_map_local, cfg.gallery_ratio, cfg.seed)
             genuine, impostor, seen_r1 = compute_genuine_impostor(
-                feature_extractor, gal, prb, train_id_map_local, cfg, return_rank1=True)
+                feature_extractor, gal, prb, train_id_map, cfg, return_rank1=True)
             seen_eer = compute_eer(genuine, impostor)
-            print(f"      [ep{epoch}] seen_dom_seen_id: R1={seen_r1:.2f}% | "
+            print(f"      [final] seen_dom_seen_id: R1={seen_r1:.2f}% | "
                   f"EER={seen_eer:.2f}% | Gal={len(gal)} Prb={len(prb)}")
 
             eval_results = run_full_eval(feature_extractor, eval_dict, cfg, tag=f"[ep{epoch}] ")
