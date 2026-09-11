@@ -51,6 +51,7 @@ from models import (ContextEncoder, TargetEncoder, Predictor,
 
 from evaluate import extract_features, run_full_eval, compute_eer
 from torch.utils.data import DataLoader
+from main import train_compnet, train_vit_sup
 
 
 
