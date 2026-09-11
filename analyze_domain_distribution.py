@@ -255,10 +255,11 @@ def train_plain_jepa(cfg, train_loader, eval_dict):
 # ═══════════════════════════════════════════════════════════════
 
 def compute_genuine_impostor(feature_extractor, gal_samples, prb_samples,
-                              id_map, cfg):
-    """Mirrors evaluate.py's evaluate_rank1_eer internals, but RETURNS the
-    raw genuine/impostor cosine-similarity arrays instead of collapsing
-    them to a scalar EER -- evaluate.py itself is not modified."""
+                              id_map, cfg, return_rank1=False):
+    """Mirrors evaluate.py's evaluate_rank1_eer internals. Always returns
+    the raw genuine/impostor cosine-similarity arrays; optionally also
+    returns Rank-1 accuracy (return_rank1=True) computed the same way
+    evaluate_rank1_eer does, without duplicating evaluate.py itself."""
     gal_ds = CASIADataset(gal_samples, id_map, cfg.img_size, augment=False)
     prb_ds = CASIADataset(prb_samples, id_map, cfg.img_size, augment=False)
     gal_loader = DataLoader(gal_ds, batch_size=cfg.batch_size, shuffle=False,
@@ -281,7 +282,15 @@ def compute_genuine_impostor(feature_extractor, gal_samples, prb_samples,
             genuine.extend(sims[gen_mask].tolist())
         if imp_mask.any():
             impostor.extend(sims[imp_mask].tolist())
-    return np.array(genuine), np.array(impostor)
+    genuine, impostor = np.array(genuine), np.array(impostor)
+
+    if not return_rank1:
+        return genuine, impostor
+
+    top_idx = sim.argmax(dim=1)
+    predicted = gal_labels[top_idx]
+    rank1 = (predicted == prb_labels).float().mean().item() * 100
+    return genuine, impostor, rank1
 
 
 def build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map):
@@ -294,15 +303,13 @@ def build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map):
     # resplitting, reusing split_gallery_probe exactly as build_datasets
     # does for the other 3 modes.
     train_samples = train_loader.dataset.samples
-    train_id_map = build_id_map(train_samples)   # local, contiguous over training IDs
+    train_id_map = build_id_map(train_samples)
     gal, prb = split_gallery_probe(train_samples, train_id_map, cfg.gallery_ratio, cfg.seed)
-    modes["seen_dom_seen_id"] = compute_genuine_impostor(
-        feature_extractor, gal, prb, train_id_map, cfg)
-    _g1, _i1 = modes["seen_dom_seen_id"]
-    from evaluate import compute_eer
-    print(f"  [DIAG] seen_dom_seen_id: n_genuine={len(_g1)} n_impostor={len(_i1)} "
-          f"EER={compute_eer(_g1, _i1):.2f}%  "
-          f"mean_genuine={_g1.mean():.3f}  mean_impostor={_i1.mean():.3f}")
+    genuine, impostor, seen_r1 = compute_genuine_impostor(
+        feature_extractor, gal, prb, train_id_map, cfg, return_rank1=True)
+    seen_eer = compute_eer(genuine, impostor)
+    print(f"      [ep{epoch}] seen_dom_seen_id: R1={seen_r1:.2f}% | "
+          f"EER={seen_eer:.2f}% | Gal={len(gal)} Prb={len(prb)}")
 
     # Modes 2-4: reuse build_datasets()'s own eval_dict split logic by
     # re-deriving gallery/probe SAMPLE LISTS the same way build_datasets
