@@ -97,7 +97,7 @@ if XPALM_DEVICE_FILTER:
 #   METHOD_EXTRA_FLAGS = {"use_corruption": 1, "struct_mode": "a2",
 #                          "struct_loss": "infonce", "w_a2": 0.3}
 #METHOD_EXTRA_FLAGS = {"use_corruption": 0}
-ANALYSIS_METHOD = "compnet"      # "compnet", "vit_sup", or "jepa"
+ANALYSIS_METHOD = "jepa"      # "compnet", "vit_sup", or "jepa"
 
 CHECKPOINT_PATHS = {
     "compnet": None,      # None = use OUTPUT_DIR/compnet_model.pth (default)
