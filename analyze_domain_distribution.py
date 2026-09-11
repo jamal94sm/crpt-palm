@@ -506,44 +506,29 @@ def stratified_sample(samples, max_points, key_fn):
     rng.shuffle(picked)
     return picked[:max_points]
 
-
-def build_option_c(cfg, context_encoder):
-    print(" ── Option C: t-SNE/UMAP by domain ──")
-
-    own_key = normalize_dataset_key(cfg.data_dir)
-    dir_by_key = {"casiams": CASIA_DIR, "xjtu": XJTU_DIR, "xpalm": XPALM_DIR}
-
-    all_samples = []
-    for key, ddir in dir_by_key.items():
-        if not ddir:
-            continue
-        print(f"  Scanning '{key}' at {ddir} ...")
-        samples = scan_by_key(key, ddir)
-        for s in samples:
-            s = dict(s)          # don't mutate the original dict
-            s["dataset"] = key
-            all_samples.append(s)
-
-    if not all_samples:
-        print("  No samples found across CASIA_DIR/XJTU_DIR/XPALM_DIR -- skipping Option C.")
+def build_one_tsne_figure(cfg, feature_extractor, dataset_key, data_dir):
+    """One t-SNE/UMAP figure for a SINGLE dataset, colored by its own
+    domains (spectrums) only -- no pooling across datasets."""
+    print(f"  Scanning '{dataset_key}' at {data_dir} ...")
+    samples = scan_by_key(dataset_key, data_dir)
+    if not samples:
+        print(f"  No samples found for '{dataset_key}' -- skipping its figure.")
         return
 
-    key_fn = (lambda s: s["dataset"]) if COLOR_BY == "dataset" else (lambda s: (s["dataset"], s["spectrum"]))
-    picked = stratified_sample(all_samples, MAX_TSNE_POINTS, key_fn)
-    print(f"  Selected {len(picked)} points (cap={MAX_TSNE_POINTS}) across "
-          f"{len(set(key_fn(s) for s in picked))} groups.")
+    key_fn = lambda s: s["spectrum"]
+    picked = stratified_sample(samples, MAX_TSNE_POINTS, key_fn)
+    print(f"  [{dataset_key}] Selected {len(picked)} points (cap={MAX_TSNE_POINTS}) "
+          f"across {len(set(key_fn(s) for s in picked))} domains.")
 
     id_map = build_id_map(picked)
     ds = CASIADataset(picked, id_map, cfg.img_size, augment=False)
     loader = DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
 
-    feature_extractor = context_encoder   # now already a feature_extractor, not a raw encoder
     feats, _ = extract_features(feature_extractor, loader, cfg.device)
     feats = feats.numpy()
+    color_labels = [s["spectrum"] for s in picked]
 
-    color_labels = [s["dataset"] if COLOR_BY == "dataset" else s["spectrum"] for s in picked]
-
-    print(f"  Running {REDUCTION_METHOD.upper()} on {feats.shape[0]} points "
+    print(f"  [{dataset_key}] Running {REDUCTION_METHOD.upper()} on {feats.shape[0]} points "
           f"({feats.shape[1]}-d) ...")
     if REDUCTION_METHOD == "umap":
         import umap
@@ -562,14 +547,20 @@ def build_option_c(cfg, context_encoder):
         idx = [i for i, l in enumerate(color_labels) if l == lab]
         ax.scatter(coords[idx, 0], coords[idx, 1], s=8, alpha=0.7,
                   color=label_to_color[lab], label=lab)
-    ax.set_title(f"{REDUCTION_METHOD.upper()} of encoder features, colored by "
-                f"{COLOR_BY} (trained on {cfg.data_dir}, {','.join(TRAIN_SPECTRUMS)})")
     ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=7, markerscale=2)
     fig.tight_layout()
-    out_path = os.path.join(OUTPUT_DIR, f"option_c_{REDUCTION_METHOD}_{COLOR_BY}.png")
+    out_path = os.path.join(OUTPUT_DIR, f"option_c_{REDUCTION_METHOD}_{dataset_key}.png")
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
     print(f"  Saved: {out_path}")
+
+
+def build_option_c(cfg, context_encoder):
+    print(" ── Option C: t-SNE/UMAP by domain (separate figure per dataset) ──")
+    feature_extractor = context_encoder
+
+    build_one_tsne_figure(cfg, feature_extractor, "xjtu", XJTU_DIR)
+    build_one_tsne_figure(cfg, feature_extractor, "xpalm", XPALM_DIR)
 
 
 # ═══════════════════════════════════════════════════════════════
