@@ -97,7 +97,13 @@ if XPALM_DEVICE_FILTER:
 #   METHOD_EXTRA_FLAGS = {"use_corruption": 1, "struct_mode": "a2",
 #                          "struct_loss": "infonce", "w_a2": 0.3}
 #METHOD_EXTRA_FLAGS = {"use_corruption": 0}
-ANALYSIS_METHOD = "compnet"      # "compnet" or "vit_sup"
+ANALYSIS_METHOD = "compnet"      # "compnet", "vit_sup", or "jepa"
+
+CHECKPOINT_PATHS = {
+    "compnet": None,      # None = use OUTPUT_DIR/compnet_model.pth (default)
+    "vit_sup": None,      # None = use OUTPUT_DIR/vit_sup_model.pth (default)
+    "jepa": "./out_domain_analysis_xpalm/JEPA_context_encoder.pth",
+}
 
 EPOCHS = 200
 EVAL_EVERY = 20
@@ -189,7 +195,7 @@ def train_supervised(cfg, train_loader, eval_dict, n_train_ids):
     n_par = sum(p.numel() for p in model.parameters())
     print(f" {ANALYSIS_METHOD}: {n_par/1e6:.2f}M params  n_classes={n_train_ids}")
 
-    ckpt_path = os.path.join(OUTPUT_DIR, f"{ANALYSIS_METHOD}_model.pth")
+    ckpt_path = CHECKPOINT_PATHS.get(ANALYSIS_METHOD) or os.path.join(OUTPUT_DIR, f"{ANALYSIS_METHOD}_model.pth")
     if os.path.isfile(ckpt_path):
         print(f" Found existing checkpoint: {ckpt_path} -- loading, SKIPPING training.")
         model.load_state_dict(torch.load(ckpt_path, map_location=cfg.device))
@@ -263,6 +269,15 @@ def train_plain_jepa(cfg, train_loader, eval_dict):
     img_size = (cfg.img_size, cfg.img_size)
     print(f"\n Building JEPA (analysis run)...")
     context_encoder = ContextEncoder(img_size, cfg.num_patches, cfg.embed_dim).to(cfg.device)
+
+    ckpt_path = CHECKPOINT_PATHS.get("jepa") or os.path.join(OUTPUT_DIR, "JEPA_context_encoder.pth")
+    if ckpt_path and os.path.isfile(ckpt_path):
+        print(f" Found existing checkpoint: {ckpt_path} -- loading, SKIPPING training.")
+        context_encoder.load_state_dict(torch.load(ckpt_path, map_location=cfg.device))
+        context_encoder.eval()
+        return FeatureExtractor(context_encoder)
+    print(f" No existing checkpoint at {ckpt_path} -- training from scratch.")
+
     target_encoder = TargetEncoder(img_size, cfg.num_patches, cfg.embed_dim).to(cfg.device)
     predictor = Predictor(cfg.num_patches, cfg.embed_dim,
                           norm_struct_out=bool(cfg.norm_struct_out)).to(cfg.device)
@@ -354,8 +369,11 @@ def train_plain_jepa(cfg, train_loader, eval_dict):
             context_encoder.train()
 
     context_encoder.eval()
+    save_path = os.path.join(OUTPUT_DIR, "JEPA_context_encoder.pth")
+    torch.save(context_encoder.state_dict(), save_path)
+    print(f" Saved checkpoint: {save_path}")
     print(" Training complete.\n")
-    return context_encoder
+    return FeatureExtractor(context_encoder)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -578,7 +596,10 @@ def main():
 
     train_loader, eval_dict, id_map, n_train_ids, train_id_map = build_datasets(cfg)
 
-    feature_extractor_or_encoder = train_supervised(cfg, train_loader, eval_dict, n_train_ids)
+    if ANALYSIS_METHOD == "jepa":
+        feature_extractor_or_encoder = train_plain_jepa(cfg, train_loader, eval_dict)
+    else:
+        feature_extractor_or_encoder = train_supervised(cfg, train_loader, eval_dict, n_train_ids)
 
     build_option_b(cfg, feature_extractor_or_encoder, train_loader, eval_dict, id_map)
     build_option_c(cfg, feature_extractor_or_encoder)
