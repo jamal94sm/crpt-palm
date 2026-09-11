@@ -401,7 +401,7 @@ def build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map):
     genuine, impostor, seen_r1 = compute_genuine_impostor(
         feature_extractor, gal, prb, train_id_map, cfg, return_rank1=True)
     seen_eer = compute_eer(genuine, impostor)
-    print(f"      [ep{epoch}] seen_dom_seen_id: R1={seen_r1:.2f}% | "
+    print(f"      [final] seen_dom_seen_id: R1={seen_r1:.2f}% | "
           f"EER={seen_eer:.2f}% | Gal={len(gal)} Prb={len(prb)}")
 
     # Modes 2-4: reuse build_datasets()'s own eval_dict split logic by
