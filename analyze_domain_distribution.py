@@ -48,7 +48,8 @@ from dataset import (build_datasets, split_gallery_probe, build_id_map,
 from models import (ContextEncoder, TargetEncoder, Predictor,
                      FeatureExtractor, patchify, apply_masks,
                      repeat_interleave_batch, update_ema)
-from evaluate import extract_features, run_full_eval
+
+from evaluate import extract_features, run_full_eval, compute_eer
 from torch.utils.data import DataLoader
 
 
@@ -228,10 +229,20 @@ def train_plain_jepa(cfg, train_loader, eval_dict):
         if epoch % EVAL_EVERY == 0 or epoch == cfg.epochs:
             print(f"\n  ── Eval at epoch {epoch} ──")
             context_encoder.eval()
+
+            train_samples = train_loader.dataset.samples
+            train_id_map = build_id_map(train_samples)
+            gal, prb = split_gallery_probe(train_samples, train_id_map, cfg.gallery_ratio, cfg.seed)
+            genuine, impostor = compute_genuine_impostor(feature_extractor, gal, prb, train_id_map, cfg)
+            seen_r1 = None  # rank-1 not computed here, only EER (see note below)
+            seen_eer = compute_eer(genuine, impostor)
+            print(f"      [ep{epoch}] seen_dom_seen_id: EER={seen_eer:.2f}% | "
+                  f"Gal={len(gal)} Prb={len(prb)}")
+
             eval_results = run_full_eval(feature_extractor, eval_dict, cfg, tag=f"[ep{epoch}] ")
             mean_r1 = sum(r["rank1"] for r in eval_results.values()) / max(len(eval_results), 1)
-            mean_eer = sum(r["eer"] for r in eval_results.values()) / max(len(eval_results), 1)
-            print(f"    Summary: Mean R1={mean_r1:.2f}% | Mean EER={mean_eer:.2f}%\n")
+            mean_eer = (sum(r["eer"] for r in eval_results.values()) + seen_eer) / (len(eval_results) + 1)
+            print(f"    Summary: Mean R1={mean_r1:.2f}% | Mean EER (incl. seen_dom_seen_id)={mean_eer:.2f}%\n")
             context_encoder.train()
 
     context_encoder.eval()
@@ -479,6 +490,10 @@ def main():
     train_loader, eval_dict, id_map, n_train_ids, train_id_map = build_datasets(cfg)
 
     context_encoder = train_plain_jepa(cfg, train_loader, eval_dict)
+    ckpt_path = os.path.join(OUTPUT_DIR, "context_encoder.pth")
+    torch.save(context_encoder.state_dict(), ckpt_path)
+    print(f" Saved checkpoint: {ckpt_path}")
+  
 
     build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map)
     build_option_c(cfg, context_encoder)
