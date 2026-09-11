@@ -172,7 +172,11 @@ def train_supervised(cfg, train_loader, eval_dict, n_train_ids):
     main.py's train_compnet/train_vit_sup exactly for the model/optimizer/
     loss, but WITHOUT file-writing (write_config_block/append_text) or
     cross-dataset eval, since this script owns its own output files.
-    Returns the trained feature_extractor directly."""
+    Returns the trained feature_extractor directly.
+
+    If a checkpoint for ANALYSIS_METHOD already exists in OUTPUT_DIR,
+    loads it and SKIPS training entirely -- delete the checkpoint file
+    (or change OUTPUT_DIR) to force a fresh run."""
     if ANALYSIS_METHOD == "compnet":
         model = CompNet(cfg.embed_dim, n_train_ids, base=cfg.compnet_channels).to(cfg.device)
         feature_extractor = model.backbone
@@ -184,6 +188,15 @@ def train_supervised(cfg, train_loader, eval_dict, n_train_ids):
 
     n_par = sum(p.numel() for p in model.parameters())
     print(f" {ANALYSIS_METHOD}: {n_par/1e6:.2f}M params  n_classes={n_train_ids}")
+
+    ckpt_path = os.path.join(OUTPUT_DIR, f"{ANALYSIS_METHOD}_model.pth")
+    if os.path.isfile(ckpt_path):
+        print(f" Found existing checkpoint: {ckpt_path} -- loading, SKIPPING training.")
+        model.load_state_dict(torch.load(ckpt_path, map_location=cfg.device))
+        model.eval()
+        return feature_extractor
+      
+    print(f" No existing checkpoint at {ckpt_path} -- training from scratch.")
 
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate,
                             weight_decay=cfg.weight_decay)
@@ -235,6 +248,8 @@ def train_supervised(cfg, train_loader, eval_dict, n_train_ids):
             model.train()
 
     model.eval()
+    torch.save(model.state_dict(), ckpt_path)
+    print(f" Saved checkpoint: {ckpt_path}")
     print(" Training complete.\n")
     return feature_extractor
 
@@ -590,10 +605,6 @@ def main():
     train_loader, eval_dict, id_map, n_train_ids, train_id_map = build_datasets(cfg)
 
     feature_extractor_or_encoder = train_supervised(cfg, train_loader, eval_dict, n_train_ids)
-    ckpt_path = os.path.join(OUTPUT_DIR, f"{ANALYSIS_METHOD}_model.pth")
-    torch.save(feature_extractor_or_encoder.state_dict() if hasattr(feature_extractor_or_encoder, "state_dict")
-               else {}, ckpt_path)
-    print(f" Saved checkpoint: {ckpt_path}")
 
     build_option_b(cfg, feature_extractor_or_encoder, train_loader, eval_dict, id_map)
     build_option_c(cfg, feature_extractor_or_encoder)
