@@ -52,7 +52,7 @@ from models import (ContextEncoder, TargetEncoder, Predictor,
 from evaluate import extract_features, run_full_eval, compute_eer
 from torch.utils.data import DataLoader
 from main import train_compnet, train_vit_sup
-
+from models import CompNet, PlainViT, FeatModule
 
 
 
@@ -145,6 +145,99 @@ def build_cfg():
     if TEST_SPECTRUMS:
         args += ["--test_spectrums", *TEST_SPECTRUMS]
     return get_cfg(args)
+
+
+
+
+
+
+
+def make_scheduler(opt, cfg, total_steps):
+    warmup_steps = int(cfg.warmup_ratio * total_steps)
+
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return cfg.start_lr / cfg.learning_rate + \
+                (1 - cfg.start_lr / cfg.learning_rate) * step / warmup_steps
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return cfg.final_lr / cfg.learning_rate + \
+            (1 - cfg.final_lr / cfg.learning_rate) * \
+            0.5 * (1 + math.cos(math.pi * progress))
+
+    return torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+
+
+def train_supervised(cfg, train_loader, eval_dict, n_train_ids):
+    """Minimal supervised training (CompNet or ViT-sup), mirroring
+    main.py's train_compnet/train_vit_sup exactly for the model/optimizer/
+    loss, but WITHOUT file-writing (write_config_block/append_text) or
+    cross-dataset eval, since this script owns its own output files.
+    Returns the trained feature_extractor directly."""
+    if ANALYSIS_METHOD == "compnet":
+        model = CompNet(cfg.embed_dim, n_train_ids, base=cfg.compnet_channels).to(cfg.device)
+        feature_extractor = model.backbone
+    else:
+        model = PlainViT(img_size=cfg.img_size, patch_size=cfg.patch_size,
+                         embed_dim=cfg.embed_dim, depth=cfg.vit_depth,
+                         n_heads=cfg.vit_heads, n_classes=n_train_ids).to(cfg.device)
+        feature_extractor = FeatModule(model)
+
+    n_par = sum(p.numel() for p in model.parameters())
+    print(f" {ANALYSIS_METHOD}: {n_par/1e6:.2f}M params  n_classes={n_train_ids}")
+
+    opt = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate,
+                            weight_decay=cfg.weight_decay)
+    total_steps = cfg.epochs * len(train_loader)
+    scheduler = make_scheduler(opt, cfg, total_steps)
+    ce = torch.nn.CrossEntropyLoss(label_smoothing=cfg.label_smoothing)
+
+    print(f" Training ({total_steps} steps, CE on IDs)...")
+    for epoch in range(1, cfg.epochs + 1):
+        model.train()
+        ep_loss, ep_correct, seen, n_bat = 0.0, 0, 0, 0
+
+        for images, labels in train_loader:
+            images, labels = images.to(cfg.device), labels.to(cfg.device)
+            logits, _feat = model(images)
+            loss = ce(logits, labels)
+
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            scheduler.step()
+
+            ep_loss += loss.item()
+            ep_correct += (logits.argmax(1) == labels).sum().item()
+            seen += labels.size(0)
+            n_bat += 1
+
+        if epoch % 10 == 0 or epoch == cfg.epochs or epoch == 1:
+            print(f"  ep {epoch:03d}/{cfg.epochs}  CE={ep_loss/max(n_bat,1):.4f}  "
+                  f"train_acc={100.0*ep_correct/max(seen,1):.2f}%")
+
+        if epoch % EVAL_EVERY == 0 or epoch == cfg.epochs:
+            print(f"\n  ── Eval at epoch {epoch} ──")
+            model.eval()
+
+            train_samples = train_loader.dataset.samples
+            train_id_map_local = build_id_map(train_samples)
+            gal, prb = split_gallery_probe(train_samples, train_id_map_local, cfg.gallery_ratio, cfg.seed)
+            genuine, impostor, seen_r1 = compute_genuine_impostor(
+                feature_extractor, gal, prb, train_id_map_local, cfg, return_rank1=True)
+            seen_eer = compute_eer(genuine, impostor)
+            print(f"      [ep{epoch}] seen_dom_seen_id: R1={seen_r1:.2f}% | "
+                  f"EER={seen_eer:.2f}% | Gal={len(gal)} Prb={len(prb)}")
+
+            eval_results = run_full_eval(feature_extractor, eval_dict, cfg, tag=f"[ep{epoch}] ")
+            mean_r1 = sum(r["rank1"] for r in eval_results.values()) / max(len(eval_results), 1)
+            mean_eer = (sum(r["eer"] for r in eval_results.values()) + seen_eer) / (len(eval_results) + 1)
+            print(f"    Summary: Mean R1={mean_r1:.2f}% | Mean EER (incl. seen_dom_seen_id)={mean_eer:.2f}%\n")
+            model.train()
+
+    model.eval()
+    print(" Training complete.\n")
+    return feature_extractor
+
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -295,7 +388,7 @@ def compute_genuine_impostor(feature_extractor, gal_samples, prb_samples,
 
 def build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map):
     print(" ── Option B: genuine/impostor distributions ──")
-    feature_extractor = FeatureExtractor(context_encoder)
+    feature_extractor = context_encoder   # now already a feature_extractor, not a raw encoder
 
     modes = {}
 
@@ -446,7 +539,7 @@ def build_option_c(cfg, context_encoder):
     ds = CASIADataset(picked, id_map, cfg.img_size, augment=False)
     loader = DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
 
-    feature_extractor = FeatureExtractor(context_encoder)
+    feature_extractor = context_encoder   # now already a feature_extractor, not a raw encoder
     feats, _ = extract_features(feature_extractor, loader, cfg.device)
     feats = feats.numpy()
 
@@ -496,17 +589,14 @@ def main():
 
     train_loader, eval_dict, id_map, n_train_ids, train_id_map = build_datasets(cfg)
 
-    train_fn = train_compnet if ANALYSIS_METHOD == "compnet" else train_vit_sup
-    print(f" Training supervised model: {ANALYSIS_METHOD}")
-    final_eval = train_fn(cfg, train_loader, eval_dict, n_train_ids, train_id_map)
-    context_encoder = final_eval["encoder"]   # confirm this key -- see note below
-    ckpt_path = os.path.join(OUTPUT_DIR, f"{ANALYSIS_METHOD}_encoder.pth")
-    torch.save(context_encoder.state_dict(), ckpt_path)
+    feature_extractor_or_encoder = train_supervised(cfg, train_loader, eval_dict, n_train_ids)
+    ckpt_path = os.path.join(OUTPUT_DIR, f"{ANALYSIS_METHOD}_model.pth")
+    torch.save(feature_extractor_or_encoder.state_dict() if hasattr(feature_extractor_or_encoder, "state_dict")
+               else {}, ckpt_path)
     print(f" Saved checkpoint: {ckpt_path}")
-  
 
-    build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map)
-    build_option_c(cfg, context_encoder)
+    build_option_b(cfg, feature_extractor_or_encoder, train_loader, eval_dict, id_map)
+    build_option_c(cfg, feature_extractor_or_encoder)
 
     print(f"\n{'='*70}\n DONE. Outputs in {OUTPUT_DIR}\n{'='*70}")
 
