@@ -125,7 +125,10 @@ class MAEDecoder(nn.Module):
         super().__init__()
         decoder_dim = decoder_dim or max((encoder_dim * 2 // 3 // 4) * 4, 32)
         decoder_depth = decoder_depth or 4
-        decoder_heads = decoder_heads or max(4, decoder_dim // 32)
+        if decoder_heads is None:
+            decoder_heads = max(1, decoder_dim // 32)
+            while decoder_dim % decoder_heads != 0 and decoder_heads > 1:
+                decoder_heads -= 1
 
         self.grid_size = num_patches
         self.decoder_embed = nn.Linear(encoder_dim, decoder_dim)
