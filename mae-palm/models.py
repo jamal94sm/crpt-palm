@@ -123,7 +123,7 @@ class MAEDecoder(nn.Module):
                  decoder_depth=None, decoder_heads=None, mlp_ratio=4.0,
                  patch_pixel_dim=None):
         super().__init__()
-        decoder_dim = decoder_dim or max(encoder_dim * 2 // 3, 32)
+        decoder_dim = decoder_dim or max((encoder_dim * 2 // 3 // 4) * 4, 32)
         decoder_depth = decoder_depth or 4
         decoder_heads = decoder_heads or max(4, decoder_dim // 32)
 
