@@ -8,6 +8,10 @@ Augmentation composition itself (flip/jitter/grayscale/blur/solarize,
 including the exact per-branch probabilities) IS verbatim from official.
 """
 
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 from torchvision import transforms
