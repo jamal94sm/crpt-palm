@@ -32,6 +32,7 @@ BASELINE_SPECS = [
      "extra": ["--method", "compnet"]},
     {"key": "maskfeat", "name": "MaskFeat", "script": "maskfeat",
      "extra": []},
+    {"key": "mae", "name": "MAE", "script": "mae", "extra": []},
     {"key": "jepa", "name": "JEPA",                 "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "0"]},
     {"key": "vicreg", "name": "VICReg",               "script": "vicreg",
@@ -313,6 +314,9 @@ def get_cfg(args=None):
              "--mode, --train_spectrums, --epochs, --batch_size, etc.), "
              "each with --use_CI 1 --n_runs N. Writes each baseline's own "
              "output file plus one combined comparison table.")
+    p.add_argument("--mae_script_path", type=str,
+        default="mae-palm/main.py",
+        help="Path to mae-palm's main.py. Only used with --run_all_baselines 1.")
     p.add_argument("--vicreg_script_path", type=str,
         default="vicreg-palm/main.py",
         help="Path to vicreg-palm's main.py. Only used with --run_all_baselines 1.") 
