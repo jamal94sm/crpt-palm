@@ -85,13 +85,36 @@ class DinoViT(nn.Module):
         self.norm = nn.LayerNorm(embed_dim)
         self.embed_dim = embed_dim
 
+    def _interpolate_pos_embed(self, n_patches, device):
+        """Official DINO supports variable input resolution (multi-crop's
+        differently-sized local vs. global crops) via interpolating the
+        position embedding to match the actual patch grid at each forward
+        call. self.pos_embed was built for self.grid_size**2 + 1
+        positions; here we bicubically resize its patch portion to
+        whatever grid the current input actually produces."""
+        cls_pos = self.pos_embed[:, :1]
+        patch_pos = self.pos_embed[:, 1:]
+
+        if n_patches == self.grid_size * self.grid_size:
+            return self.pos_embed
+
+        new_grid = int(round(n_patches ** 0.5))
+        dim = patch_pos.shape[-1]
+        patch_pos = patch_pos.reshape(1, self.grid_size, self.grid_size, dim).permute(0, 3, 1, 2)
+        patch_pos = torch.nn.functional.interpolate(
+            patch_pos, size=(new_grid, new_grid), mode="bicubic", align_corners=False)
+        patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(1, new_grid * new_grid, dim)
+        return torch.cat([cls_pos, patch_pos], dim=1)
+
     def forward(self, x):
         """Returns CLS token output only, (B, embed_dim) -- matches
-        official's backbone-then-head chaining."""
+        official's backbone-then-head chaining. Supports variable input
+        size (multi-crop) via interpolated position embedding."""
         B = x.size(0)
         z = self.proj(x).flatten(2).transpose(1, 2)
+        pos = self._interpolate_pos_embed(z.size(1), x.device)
         cls = self.cls_token.expand(B, -1, -1)
-        z = torch.cat([cls, z], dim=1) + self.pos_embed
+        z = torch.cat([cls, z], dim=1) + pos
         z = self.encoder(z)
         z = self.norm(z)
         return z[:, 0]
@@ -100,8 +123,9 @@ class DinoViT(nn.Module):
         """Full sequence including CLS, for a mean-pool eval option."""
         B = x.size(0)
         z = self.proj(x).flatten(2).transpose(1, 2)
+        pos = self._interpolate_pos_embed(z.size(1), x.device)
         cls = self.cls_token.expand(B, -1, -1)
-        z = torch.cat([cls, z], dim=1) + self.pos_embed
+        z = torch.cat([cls, z], dim=1) + pos
         z = self.encoder(z)
         z = self.norm(z)
         return z
