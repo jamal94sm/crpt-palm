@@ -423,7 +423,12 @@ def run_all_baselines(cfg):
             cmd = [sys.executable, mae_main] + shared + spec["extra"] + \
                   ["--output_name", out_name]
             cwd = os.path.dirname(mae_main)
-
+        elif spec["script"] == "dino":
+            dino_main = os.path.abspath(os.path.join(here, cfg.dino_script_path))
+            cmd = [sys.executable, dino_main] + shared + spec["extra"] + \
+                  ["--output_name", out_name]
+            cwd = os.path.dirname(dino_main)
+            
         print(f"\n{'#'*80}\n  BASELINE: {spec['name']}")
         print(f"  CMD: {' '.join(cmd)}\n{'#'*80}\n")
         subprocess.run(cmd, cwd=cwd, check=True)
