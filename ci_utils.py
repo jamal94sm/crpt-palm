@@ -413,6 +413,11 @@ def run_all_baselines(cfg):
             cmd = [sys.executable, bt_main] + shared + spec["extra"] + \
                   ["--output_name", out_name]
             cwd = os.path.dirname(bt_main)
+        elif spec["script"] == "maskfeat":
+            maskfeat_main = os.path.abspath(os.path.join(here, cfg.maskfeat_script_path))
+            cmd = [sys.executable, maskfeat_main] + shared + spec["extra"] + \
+                  ["--output_name", out_name]
+            cwd = os.path.dirname(maskfeat_main)
 
         print(f"\n{'#'*80}\n  BASELINE: {spec['name']}")
         print(f"  CMD: {' '.join(cmd)}\n{'#'*80}\n")
