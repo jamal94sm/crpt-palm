@@ -30,6 +30,8 @@ BASELINE_SPECS = [
      "extra": ["--method", "vit_sup"]},
     {"key": "compnet", "name": "CompNet-supervised",   "script": "self",
      "extra": ["--method", "compnet"]},
+    {"key": "maskfeat", "name": "MaskFeat", "script": "maskfeat",
+     "extra": []},
     {"key": "jepa", "name": "JEPA",                 "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "0"]},
     {"key": "vicreg", "name": "VICReg",               "script": "vicreg",
