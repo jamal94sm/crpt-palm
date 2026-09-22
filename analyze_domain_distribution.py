@@ -61,11 +61,16 @@ from models import CompNet, PlainViT, FeatModule
 #  PARAMETERS -- edit these, then just run the script directly
 # ═══════════════════════════════════════════════════════════════
 
-DATA_DIR = "/home/pai-ng/Jamal/xpalm"
-TRAIN_SPECTRUMS = ["sf", "close", "jf", "fl", "bf", "rnd"]
-TEST_SPECTRUMS = None            # None = every other SMARTPHONE domain
-                                  # (scanner excluded via XPALM_DEVICE_FILTER below)
+DATA_DIR = "/home/pai-ng/Jamal/XJTU-UP"
+TRAIN_SPECTRUMS = ["iPhone_Nature", "iPhone_Flash"]
+TEST_SPECTRUMS = ["huawei_Nature", "huawei_Flash"]
 MODE = "cross_domain_openset"
+TRAIN_ID_RATIO = 0.5             # 50% of identities seen in training
+
+# Section D: max sampled pairs PER of the 4 (same/diff ID x same/diff
+# device) categories -- exhaustive all-pairs on ~7880 XJTU samples would
+# be ~31M pairs, so this caps a random subset per category instead.
+D_MAX_PAIRS_PER_CATEGORY = 5000
 
 CASIA_DIR = "/home/pai-ng/Jamal/CASIA-MS-ROI"
 XJTU_DIR = "/home/pai-ng/Jamal/XJTU-UP"
@@ -102,7 +107,10 @@ ANALYSIS_METHOD = "jepa"      # "compnet", "vit_sup", or "jepa"
 CHECKPOINT_PATHS = {
     "compnet": None,      # None = use OUTPUT_DIR/compnet_model.pth (default)
     "vit_sup": None,      # None = use OUTPUT_DIR/vit_sup_model.pth (default)
-    "jepa": "./out_domain_analysis_xpalm/JEPA_context_encoder.pth",
+    "jepa": None,         # None = use OUTPUT_DIR/JEPA_context_encoder.pth (default)
+                           # -- was pointed at the OLD X-Palm checkpoint; that
+                           #    encoder was trained on different domains/IDs
+                           #    and must NOT be reused for this XJTU analysis.
 }
 
 EPOCHS = 200
@@ -112,7 +120,7 @@ NUM_PATCHES = 8
 BATCH_SIZE = 64
 GALLERY_RATIO = 0.5
 
-OUTPUT_DIR = "./out_domain_analysis_xpalm"
+OUTPUT_DIR = "./out_domain_analysis_xjtu"
 MAX_TSNE_POINTS = 3000
 REDUCTION_METHOD = "tsne"        # "tsne" or "umap"
 COLOR_BY = "spectrum"            # "spectrum" (fine domain) or "dataset"
@@ -138,6 +146,7 @@ def build_cfg():
         "--data_dir", DATA_DIR,
         "--mode", MODE,
         "--train_spectrums", *TRAIN_SPECTRUMS,
+        "--train_id_ratio", str(TRAIN_ID_RATIO),
         "--embed_dim", str(EMBED_DIM),
         "--num_patches", str(NUM_PATCHES),
         "--epochs", str(EPOCHS),
@@ -418,15 +427,20 @@ def compute_genuine_impostor(feature_extractor, gal_samples, prb_samples,
     rank1 = (predicted == prb_labels).float().mean().item() * 100
     return genuine, impostor, rank1
 
-def build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map):
-    print(" ── Option B: genuine/impostor distributions ──")
-    feature_extractor = context_encoder   # now already a feature_extractor, not a raw encoder
+def build_option_ab(cfg, feature_extractor, train_loader, eval_dict, id_map):
+    """Sections A (distance) and B (similarity): genuine/impostor pairs
+    in two conditions, SAME identities throughout, domain changes:
+      - seen_dom_seen_id:   training-domain images, training IDs
+      - unseen_dom_seen_id: unseen-domain images, the SAME (training) IDs
+                             -- reuses eval_dict's existing split, which
+                             already selects unseen-domain samples whose
+                             identity IS in train_ids (see
+                             split_mode_cross_domain_openset).
+    """
+    print(" ── Sections A/B: genuine/impostor distributions ──")
 
     modes = {}
 
-    # Mode 1: seen_dom_seen_id -- the TRAINING samples themselves, no
-    # resplitting, reusing split_gallery_probe exactly as build_datasets
-    # does for the other 3 modes.
     train_samples = train_loader.dataset.samples
     train_id_map = build_id_map(train_samples)
     gal, prb = split_gallery_probe(train_samples, train_id_map, cfg.gallery_ratio, cfg.seed)
@@ -437,8 +451,7 @@ def build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map):
           f"EER={seen_eer:.2f}% | Gal={len(gal)} Prb={len(prb)}")
     modes["seen_dom_seen_id"] = (genuine, impostor)
 
-    # Mode 2: seen_dom_unseen_id -- reuses build_datasets()'s own eval_dict.
-    name = "seen_dom_unseen_id"
+    name = "unseen_dom_seen_id"
     if name in eval_dict:
         ev = eval_dict[name]
         gal_feats, gal_labels = extract_features(feature_extractor, ev["gallery_loader"], cfg.device)
@@ -459,9 +472,10 @@ def build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map):
     else:
         print(f"   (skipping {name}: not present in eval_dict for this config)")
 
-    # ─── Plot: 1x2 grid, no captions ───
+    order = ["seen_dom_seen_id", "unseen_dom_seen_id"]
+
+    # ─── Section B: similarity ───
     fig, axes = plt.subplots(1, 2, figsize=(11, 5))
-    order = ["seen_dom_seen_id", "seen_dom_unseen_id"]
     for ax, name in zip(axes, order):
         if name not in modes:
             ax.axis("off")
@@ -472,9 +486,26 @@ def build_option_b(cfg, context_encoder, train_loader, eval_dict, id_map):
         ax.set_xlabel("Cosine similarity")
         ax.set_ylabel("Density")
         ax.legend()
-
     fig.tight_layout()
-    out_path = os.path.join(OUTPUT_DIR, "option_b_genuine_impostor.png")
+    out_path = os.path.join(OUTPUT_DIR, "section_b_similarity.png")
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+
+    # ─── Section A: distance (1 - similarity) ───
+    fig, axes = plt.subplots(1, 2, figsize=(11, 5))
+    for ax, name in zip(axes, order):
+        if name not in modes:
+            ax.axis("off")
+            continue
+        genuine, impostor = modes[name]
+        ax.hist(1 - genuine, bins=40, alpha=0.6, density=True, label="Genuine", color="tab:green")
+        ax.hist(1 - impostor, bins=40, alpha=0.6, density=True, label="Impostor", color="tab:red")
+        ax.set_xlabel("Cosine distance (1 - similarity)")
+        ax.set_ylabel("Density")
+        ax.legend()
+    fig.tight_layout()
+    out_path = os.path.join(OUTPUT_DIR, "section_a_distance.png")
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
     print(f"  Saved: {out_path}")
@@ -582,6 +613,89 @@ def build_option_c(cfg, context_encoder):
 
 
 # ═══════════════════════════════════════════════════════════════
+#  Step 4 (Option D): cosine distance histograms
+# ═══════════════════════════════════════════════════════════════
+
+def _device_of(spectrum):
+    """XJTU-UP spectrum labels are '{device}_{condition}', e.g.
+    'iPhone_Nature' -> 'iPhone'. Section D's 'same domain' = same DEVICE,
+    collapsing Nature/Flash within a device."""
+    return spectrum.split("_")[0]
+
+
+def build_option_d(cfg, feature_extractor):
+    """Section D: 4-way pairwise cosine-DISTANCE histogram on XJTU-UP,
+    categorized by (same/different identity) x (same/different device):
+      1. same ID,  same device  (iPhone-iPhone or huawei-huawei)
+      2. same ID,  diff device  (iPhone-huawei)
+      3. diff ID,  same device
+      4. diff ID,  diff device
+    Pairs are randomly sampled (not exhaustive) up to
+    D_MAX_PAIRS_PER_CATEGORY per category, since ~7880 XJTU samples would
+    otherwise produce ~31M total pairs."""
+    print(" ── Section D: 4-way same/diff-ID x same/diff-device (XJTU) ──")
+
+    samples = scan_by_key("xjtu", XJTU_DIR)
+    if not samples:
+        print("  No XJTU samples found -- skipping Section D.")
+        return
+
+    id_map = build_id_map(samples)
+    ds = CASIADataset(samples, id_map, cfg.img_size, augment=False)
+    loader = DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
+    feats, labels = extract_features(feature_extractor, loader, cfg.device)
+    feats = torch.nn.functional.normalize(feats, dim=-1)
+
+    devices = [_device_of(s["spectrum"]) for s in samples]
+    n = len(samples)
+
+    rng = random.Random(SEED)
+    buckets = {"same_id_same_dev": [], "same_id_diff_dev": [],
+               "diff_id_same_dev": [], "diff_id_diff_dev": []}
+    cap = D_MAX_PAIRS_PER_CATEGORY
+    attempts = 0
+    max_attempts = cap * 50   # safety valve so this can't loop forever
+    while attempts < max_attempts and not all(len(v) >= cap for v in buckets.values()):
+        i, j = rng.randrange(n), rng.randrange(n)
+        if i == j:
+            attempts += 1
+            continue
+        same_id = labels[i].item() == labels[j].item()
+        same_dev = devices[i] == devices[j]
+        key = f"{'same' if same_id else 'diff'}_id_{'same' if same_dev else 'diff'}_dev"
+        if len(buckets[key]) < cap:
+            sim = torch.dot(feats[i], feats[j]).item()
+            buckets[key].append(1 - sim)   # cosine distance
+        attempts += 1
+
+    for k, v in buckets.items():
+        print(f"      {k}: n={len(v)}")
+
+    titles = {
+        "same_id_same_dev": "Same ID, Same Device",
+        "same_id_diff_dev": "Same ID, Diff Device",
+        "diff_id_same_dev": "Diff ID, Same Device",
+        "diff_id_diff_dev": "Diff ID, Diff Device",
+    }
+    fig, axes = plt.subplots(2, 2, figsize=(11, 9))
+    for ax, key in zip(axes.flat, titles.keys()):
+        vals = buckets[key]
+        if not vals:
+            ax.axis("off")
+            continue
+        ax.hist(vals, bins=40, alpha=0.75, density=True, color="tab:blue")
+        ax.set_title(titles[key])
+        ax.set_xlabel("Cosine distance")
+        ax.set_ylabel("Density")
+    fig.tight_layout()
+    out_path = os.path.join(OUTPUT_DIR, "section_d_id_device.png")
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+
+
+
+# ═══════════════════════════════════════════════════════════════
 #  Main
 # ═══════════════════════════════════════════════════════════════
 
@@ -601,8 +715,9 @@ def main():
     else:
         feature_extractor_or_encoder = train_supervised(cfg, train_loader, eval_dict, n_train_ids)
 
-    build_option_b(cfg, feature_extractor_or_encoder, train_loader, eval_dict, id_map)
+    build_option_ab(cfg, feature_extractor_or_encoder, train_loader, eval_dict, id_map)
     build_option_c(cfg, feature_extractor_or_encoder)
+    build_option_d(cfg, feature_extractor_or_encoder)
 
     print(f"\n{'='*70}\n DONE. Outputs in {OUTPUT_DIR}\n{'='*70}")
 
