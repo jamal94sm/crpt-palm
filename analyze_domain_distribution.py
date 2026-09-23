@@ -492,16 +492,18 @@ def build_option_ab(cfg, feature_extractor, train_loader, eval_dict, id_map):
     plt.close(fig)
     print(f"  Saved: {out_path}")
 
-    # ─── Section A: distance (1 - similarity) ───
+    # ─── Section A: distance (arccos-based angular distance, normalized to [0,1]) ───
     fig, axes = plt.subplots(1, 2, figsize=(11, 5))
     for ax, name in zip(axes, order):
         if name not in modes:
             ax.axis("off")
             continue
         genuine, impostor = modes[name]
-        ax.hist(1 - genuine, bins=40, alpha=0.6, density=True, label="Genuine", color="tab:green")
-        ax.hist(1 - impostor, bins=40, alpha=0.6, density=True, label="Impostor", color="tab:red")
-        ax.set_xlabel("Cosine distance (1 - similarity)")
+        genuine_ang = np.arccos(np.clip(genuine, -1.0, 1.0)) / np.pi
+        impostor_ang = np.arccos(np.clip(impostor, -1.0, 1.0)) / np.pi
+        ax.hist(genuine_ang, bins=40, alpha=0.6, density=True, label="Genuine", color="tab:green")
+        ax.hist(impostor_ang, bins=40, alpha=0.6, density=True, label="Impostor", color="tab:red")
+        ax.set_xlabel("Angular distance (arccos(sim)/π)")
         ax.set_ylabel("Density")
         ax.legend()
     fig.tight_layout()
@@ -665,7 +667,8 @@ def build_option_d(cfg, feature_extractor):
         key = f"{'same' if same_id else 'diff'}_id_{'same' if same_dev else 'diff'}_dev"
         if len(buckets[key]) < cap:
             sim = torch.dot(feats[i], feats[j]).item()
-            buckets[key].append(1 - sim)   # cosine distance
+            sim = max(-1.0, min(1.0, sim))   # guard against tiny float overshoot past ±1
+            buckets[key].append(math.acos(sim) / math.pi)   # angular distance
         attempts += 1
 
     for k, v in buckets.items():
@@ -685,7 +688,7 @@ def build_option_d(cfg, feature_extractor):
             continue
         ax.hist(vals, bins=40, alpha=0.75, density=True, color="tab:blue")
         ax.set_title(titles[key])
-        ax.set_xlabel("Cosine distance")
+        ax.set_xlabel("Angular distance (arccos(sim)/π)")
         ax.set_ylabel("Density")
     fig.tight_layout()
     out_path = os.path.join(OUTPUT_DIR, "section_d_id_device.png")
