@@ -553,17 +553,11 @@ def scan_xpalm(data_root):
 
                 identity = f"XPALM_{subj_id}_{hand}"
 
-                try:
-                    brand = XPALM_DEVICE_BRAND.get(int(subj_id))
-                except (TypeError, ValueError):
-                    brand = None
-
                 samples.append({
                     "path": os.path.join(subj_dir, fname),
                     "identity": identity,
                     "spectrum": domain,
-                    "device": "smartphone",
-                    "device_brand": brand,
+                    "device": "scanner",
                 })
                 ids.add(identity)
 
@@ -586,11 +580,17 @@ def scan_xpalm(data_root):
                 domain = "rnd" if cond == "rnd" else cond   # collapse rnd_1..rnd_5
                 identity = f"XPALM_{subj_id}_{hand}"
 
+                try:
+                    brand = XPALM_DEVICE_BRAND.get(int(subj_id))
+                except (TypeError, ValueError):
+                    brand = None
+
                 samples.append({
                     "path": os.path.join(subj_dir, fname),
                     "identity": identity,
                     "spectrum": domain,
                     "device": "smartphone",
+                    "device_brand": brand,
                 })
                 ids.add(identity)
 
