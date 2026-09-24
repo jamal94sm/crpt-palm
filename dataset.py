@@ -419,7 +419,7 @@ def build_datasets(cfg):
         all_samples = scan_dataset(cfg.data_dir)
         
     print(f"  Total samples: {len(all_samples)}")
-    print(f"  Spectrums: {sorted(set(s['spectrum'] for s in all_samples))}")
+    #print(f"  Spectrums: {sorted(set(s['spectrum'] for s in all_samples))}")
     print(f"  Identities: {len(set(s['identity'] for s in all_samples))}")
 
     if cfg.mode == "all":
