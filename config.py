@@ -79,16 +79,28 @@ def get_cfg(args=None):
 
     # ─── Mode ─────────────────────────────────────────────────
     p.add_argument("--mode", default="all",
-                   choices=["all", "cross_domain", "cross_domain_openset"],
+                   choices=["all", "cross_domain", "cross_domain_openset",
+                            "cross_brand_openset"],
                    help="'all' = all domains+IDs, "
                         "'cross_domain' = selected domains, all IDs, "
-                        "'cross_domain_openset' = selected domains+IDs")
+                        "'cross_domain_openset' = selected domains+IDs, "
+                        "'cross_brand_openset' = X-Palm smartphone-only, "
+                        "split by device brand instead of spectrum -- no "
+                        "'unseen_dom_seen_id' eval set (each subject used "
+                        "only one phone brand)")
     p.add_argument("--train_spectrums", nargs="*", default=["WHT", "940"],
         help="Spectrums for training (cross_domain modes)")
     p.add_argument("--test_spectrums", nargs="*", default=None,
         help="Optional: restrict cross-domain eval to these specific "
              "domains (default: None = every domain not in "
              "--train_spectrums). Only affects 'unseen_dom_*' eval sets.")
+    p.add_argument("--train_brands", nargs="*", default=["iPhone"],
+        help="Device brands for training (cross_brand_openset mode only, "
+             "X-Palm smartphone data).")
+    p.add_argument("--test_brands", nargs="*", default=None,
+        help="Optional: restrict unseen-brand eval to these specific "
+             "brands (cross_brand_openset mode; default: None = every "
+             "brand not in --train_brands).")
     p.add_argument("--train_id_ratio", type=float, default=0.8,
                    help="Fraction of IDs for training (openset mode)")
     p.add_argument("--test_sample_ratio", type=float, default=0.2,
