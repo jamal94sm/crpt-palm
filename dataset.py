@@ -30,6 +30,38 @@ def parse_filename(fname):
     return identity, spectrum, iteration
 
 
+
+# Subject ID -> smartphone brand. ONLY covers subjects present in
+# xpalm/smartphone_roi -- subjects who are scanner-only (no smartphone
+# captures at all) are correctly absent from this dict, not an oversight.
+XPALM_DEVICE_BRAND = {
+    1: 'Samsung', 2: 'Samsung', 3: 'Xiaomi', 4: 'Motorolla', 5: 'Oppo',
+    6: 'iPhone', 7: 'Nothing', 8: 'iPhone', 9: 'iPhone', 10: 'Samsung',
+    11: 'Samsung', 12: 'iPhone', 13: 'Samsung', 14: 'iPhone', 15: 'Samsung',
+    16: 'iPhone', 17: 'iPhone', 18: 'iPhone', 19: 'Oppo', 20: 'iPhone',
+    21: 'Xiaomi', 22: 'iPhone', 23: 'Samsung', 24: 'iPhone', 25: 'iPhone',
+    26: 'OnePlus', 27: 'Samsung', 28: 'iPhone', 29: 'Samsung', 30: 'iPhone',
+    31: 'iPhone', 32: 'iPhone', 33: 'Oppo', 34: 'iPhone', 35: 'OnePlus',
+    36: 'Samsung', 37: 'Nothing', 38: 'iPhone', 39: 'Sony', 40: 'iPhone',
+    41: 'iPhone', 42: 'Oppo', 43: 'iPhone', 44: 'iPhone', 45: 'iPhone',
+    46: 'iPhone', 47: 'Samsung', 48: 'iPhone', 49: 'iPhone', 50: 'iPhone',
+    51: 'iPhone', 52: 'Xiaomi', 53: 'Xiaomi', 54: 'iPhone', 55: 'Oppo',
+    56: 'Oppo', 57: 'Honor', 58: 'iPhone', 59: 'Vivo', 60: 'Pixel',
+    62: 'Vivo', 63: 'Vivo', 64: 'Oppo', 65: 'Vivo', 66: 'Vivo',
+    67: 'Samsung', 68: 'Vivo', 69: 'Samsung', 70: 'Samsung', 71: 'Pixel',
+    72: 'Pixel', 73: 'Samsung', 74: 'Pixel', 75: 'Pixel', 77: 'Pixel',
+    78: 'Pixel', 79: 'Pixel', 80: 'Pixel', 82: 'Pixel', 83: 'iPhone',
+    84: 'iPhone', 85: 'iPhone', 86: 'Oppo', 87: 'Pixel', 88: 'Xiaomi',
+    89: 'Pixel', 90: 'Oppo', 91: 'Pixel', 92: 'Pixel', 93: 'iPhone',
+    94: 'Vivo', 95: 'Vivo', 96: 'Pixel', 97: 'Pixel', 98: 'iPhone',
+    99: 'Samsung', 100: 'iPhone', 101: 'iPhone', 102: 'Xiaomi', 103: 'iPhone',
+    104: 'iPhone', 105: 'Samsung',
+}
+
+
+
+
+
 def scan_dataset(data_dir):
     """Scan dataset directory → list of (filepath, identity, spectrum)."""
     samples = []
@@ -150,6 +182,60 @@ def split_mode_cross_domain_openset(samples, train_spectrums,
         eval_sets["unseen_dom_unseen_id"] = unseen_unseen
 
     return train, eval_sets
+
+
+
+def split_mode_cross_brand_openset(samples, train_brands,
+                                    train_id_ratio=0.8, seed=2025,
+                                    test_brands=None):
+    """
+    Brand-split mode: X-Palm smartphone data ONLY, split by device brand
+    instead of spectrum. Mirrors split_mode_cross_domain_openset's
+    structure exactly, with one necessary difference: each subject used
+    exactly ONE phone, so there is no "same ID, different brand" data --
+    unseen_dom_seen_id is structurally impossible and is never added to
+    eval_sets.
+
+    Non-smartphone / unmapped samples (device_brand falsy) are excluded
+    before splitting.
+    Returns: train_samples, {eval_name: eval_samples, ...}
+    """
+    samples = [s for s in samples if s.get("device_brand")]
+
+    rng = random.Random(seed)
+    all_ids = sorted(set(s["identity"] for s in samples))
+    rng.shuffle(all_ids)
+    n_train_ids = int(len(all_ids) * train_id_ratio)
+    train_ids = set(all_ids[:n_train_ids])
+    unseen_ids = set(all_ids[n_train_ids:])
+
+    all_brands = sorted(set(s["device_brand"] for s in samples))
+    unseen_brands = [b for b in all_brands if b not in train_brands]
+    if test_brands:
+        unseen_brands = [b for b in unseen_brands if b in test_brands]
+
+    train = [s for s in samples
+             if s["device_brand"] in train_brands
+             and s["identity"] in train_ids]
+
+    eval_sets = {}
+
+    seen_unseen = [s for s in samples
+                   if s["device_brand"] in train_brands
+                   and s["identity"] in unseen_ids]
+    if seen_unseen:
+        eval_sets["seen_dom_unseen_id"] = seen_unseen
+
+    # No "unseen_dom_seen_id": each identity used only one brand.
+
+    unseen_unseen = [s for s in samples
+                     if s["device_brand"] in unseen_brands
+                     and s["identity"] in unseen_ids]
+    if unseen_unseen:
+        eval_sets["unseen_dom_unseen_id"] = unseen_unseen
+
+    return train, eval_sets
+
 
 
 # ══════════════════════════════════════════════════════════════
@@ -351,6 +437,15 @@ def build_datasets(cfg):
                 f"Train ID ratio: {cfg.train_id_ratio}")
         if getattr(cfg, "test_spectrums", None):
             info += f", Test domains: {cfg.test_spectrums}"
+    elif cfg.mode == "cross_brand_openset":
+        train_samples, eval_sets = split_mode_cross_brand_openset(
+            all_samples, cfg.train_brands,
+            cfg.train_id_ratio, cfg.seed,
+            test_brands=getattr(cfg, "test_brands", None))
+        info = (f"Train brands: {cfg.train_brands}, "
+                f"Train ID ratio: {cfg.train_id_ratio}")
+        if getattr(cfg, "test_brands", None):
+            info += f", Test brands: {cfg.test_brands}"
 
     # Global ID map from ALL samples: keeps gallery/probe labels consistent
     # across seen AND unseen identities (needed for evaluation).
@@ -458,11 +553,17 @@ def scan_xpalm(data_root):
 
                 identity = f"XPALM_{subj_id}_{hand}"
 
+                try:
+                    brand = XPALM_DEVICE_BRAND.get(int(subj_id))
+                except (TypeError, ValueError):
+                    brand = None
+
                 samples.append({
                     "path": os.path.join(subj_dir, fname),
                     "identity": identity,
                     "spectrum": domain,
-                    "device": "scanner",
+                    "device": "smartphone",
+                    "device_brand": brand,
                 })
                 ids.add(identity)
 
