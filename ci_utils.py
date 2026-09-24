@@ -159,6 +159,12 @@ def _shared_flags(cfg):
     if getattr(cfg, "test_spectrums", None):
         flags.append("--test_spectrums")
         flags += [str(s) for s in cfg.test_spectrums]
+    if getattr(cfg, "train_brands", None):
+        flags.append("--train_brands")
+        flags += [str(b) for b in cfg.train_brands]
+    if getattr(cfg, "test_brands", None):
+        flags.append("--test_brands")
+        flags += [str(b) for b in cfg.test_brands]
     flags += ["--use_CI", "1", "--n_runs", str(getattr(cfg, "n_runs", 3)),
               "--ci_level", str(getattr(cfg, "ci_level", 0.95)),
               "--output_dir", os.path.abspath(cfg.output_dir)]
