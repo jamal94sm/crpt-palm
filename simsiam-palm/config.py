@@ -20,10 +20,8 @@ def get_cfg(args=None):
 
     # ─── Mode ─────────────────────────────────────────────────
     p.add_argument("--mode", default="all",
-        choices=["all", "cross_domain", "cross_domain_openset"],
-        help="'all' = all domains+IDs, "
-             "'cross_domain' = selected domains, all IDs, "
-             "'cross_domain_openset' = selected domains+IDs")
+        choices=["all", "cross_domain", "cross_domain_openset",
+                 "cross_brand_openset"])
     p.add_argument("--train_spectrums", nargs="*", default=["WHT", "940"],
         help="Spectrums for training (cross_domain modes)")
     p.add_argument("--train_id_ratio", type=float, default=0.8,
@@ -96,6 +94,8 @@ def get_cfg(args=None):
     p.add_argument("--xjtu_dir", type=str, default=None)
     p.add_argument("--xpalm_dir", type=str, default=None)
     p.add_argument("--test_spectrums", nargs="*", default=None)
+    p.add_argument("--train_brands", nargs="*", default=["iPhone"])
+    p.add_argument("--test_brands", nargs="*", default=None)
 
 
     cfg = p.parse_args(args)
