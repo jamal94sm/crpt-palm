@@ -468,7 +468,15 @@ def build_datasets(cfg):
           f"(×{cfg.aug_multiplier} aug = "
           f"{len(train_samples) * cfg.aug_multiplier})")
     print(f"  Global IDs: {n_classes}   Training IDs (CE classes): {n_train_ids}")
-    for name, samples in eval_sets.items():
+    # seen_dom_seen_id is built from the TRAINING samples themselves,
+    # split into gallery/probe via gallery_ratio -- same mechanism as
+    # every other eval entry, just sourced from train_samples instead of
+    # eval_sets. Applies uniformly whether the split was by spectrum or
+    # by brand.
+    all_eval_sources = dict(eval_sets)
+    all_eval_sources["seen_dom_seen_id"] = train_samples
+
+    for name, samples in all_eval_sources.items():
         n_ids = len(set(s["identity"] for s in samples))
         print(f"  Eval '{name}': {len(samples)} samples, {n_ids} IDs")
 
@@ -481,7 +489,7 @@ def build_datasets(cfg):
 
     # Eval sets use the GLOBAL id map (seen + unseen must share label space).
     eval_dict = {}
-    for name, samples in eval_sets.items():
+    for name, samples in all_eval_sources.items():
         gal_samples, prb_samples = split_gallery_probe(
             samples, id_map, cfg.gallery_ratio, cfg.seed)
         gal_ds = CASIADataset(gal_samples, id_map, cfg.img_size, augment=False)
