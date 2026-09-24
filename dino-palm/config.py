@@ -25,9 +25,12 @@ def get_cfg(args=None):
 
     # ─── Mode ─────────────────────────────────────────────────
     p.add_argument("--mode", default="all",
-        choices=["all", "cross_domain", "cross_domain_openset"])
+        choices=["all", "cross_domain", "cross_domain_openset",
+                 "cross_brand_openset"])
     p.add_argument("--train_spectrums", nargs="*", default=["WHT", "940"])
     p.add_argument("--test_spectrums", nargs="*", default=None)
+    p.add_argument("--train_brands", nargs="*", default=["iPhone"])
+    p.add_argument("--test_brands", nargs="*", default=None)
     p.add_argument("--train_id_ratio", type=float, default=0.8)
     p.add_argument("--test_sample_ratio", type=float, default=0.2)
     p.add_argument("--gallery_ratio", type=float, default=0.5)
