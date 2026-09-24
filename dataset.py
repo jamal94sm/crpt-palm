@@ -184,58 +184,63 @@ def split_mode_cross_domain_openset(samples, train_spectrums,
     return train, eval_sets
 
 
-
 def split_mode_cross_brand_openset(samples, train_brands,
                                     train_id_ratio=0.8, seed=2025,
                                     test_brands=None):
     """
     Brand-split mode: X-Palm smartphone data ONLY, split by device brand
-    instead of spectrum. Mirrors split_mode_cross_domain_openset's
-    structure exactly, with one necessary difference: each subject used
-    exactly ONE phone, so there is no "same ID, different brand" data --
-    unseen_dom_seen_id is structurally impossible and is never added to
-    eval_sets.
+    instead of spectrum.
 
-    Non-smartphone / unmapped samples (device_brand falsy) are excluded
-    before splitting.
+    train_id_ratio is applied WITHIN the train_brands identities only
+    (e.g. 80% of iPhone identities), not across all brands -- since each
+    subject uses exactly one brand, there is no cross-brand identity
+    overlap to worry about.
+
+    seen_dom_unseen_id: same brand as training (e.g. iPhone), but the
+    held-out 20% of identities not used in training.
+
+    unseen_dom_unseen_id: ALL samples from brands other than
+    train_brands -- every such identity is, by construction, unseen
+    during training (each subject used exactly one phone brand).
+
+    unseen_dom_seen_id is never constructed: structurally impossible,
+    since each identity used exactly one phone.
     Returns: train_samples, {eval_name: eval_samples, ...}
     """
     samples = [s for s in samples if s.get("device_brand")]
 
+    train_brand_samples = [s for s in samples if s["device_brand"] in train_brands]
+    train_brand_ids = sorted(set(s["identity"] for s in train_brand_samples))
+
     rng = random.Random(seed)
-    all_ids = sorted(set(s["identity"] for s in samples))
-    rng.shuffle(all_ids)
-    n_train_ids = int(len(all_ids) * train_id_ratio)
-    train_ids = set(all_ids[:n_train_ids])
-    unseen_ids = set(all_ids[n_train_ids:])
+    rng.shuffle(train_brand_ids)
+    n_train_ids = int(len(train_brand_ids) * train_id_ratio)
+    train_ids = set(train_brand_ids[:n_train_ids])
+    unseen_ids = set(train_brand_ids[n_train_ids:])
 
     all_brands = sorted(set(s["device_brand"] for s in samples))
     unseen_brands = [b for b in all_brands if b not in train_brands]
     if test_brands:
         unseen_brands = [b for b in unseen_brands if b in test_brands]
 
-    train = [s for s in samples
-             if s["device_brand"] in train_brands
-             and s["identity"] in train_ids]
+    # Training: train-brand samples, train IDs only
+    train = [s for s in train_brand_samples if s["identity"] in train_ids]
 
     eval_sets = {}
 
-    seen_unseen = [s for s in samples
-                   if s["device_brand"] in train_brands
-                   and s["identity"] in unseen_ids]
+    # Seen brand x unseen IDs (held-out iPhone identities)
+    seen_unseen = [s for s in train_brand_samples if s["identity"] in unseen_ids]
     if seen_unseen:
         eval_sets["seen_dom_unseen_id"] = seen_unseen
 
     # No "unseen_dom_seen_id": each identity used only one brand.
 
-    unseen_unseen = [s for s in samples
-                     if s["device_brand"] in unseen_brands
-                     and s["identity"] in unseen_ids]
+    # Unseen brand x unseen IDs: ALL samples from other brands.
+    unseen_unseen = [s for s in samples if s["device_brand"] in unseen_brands]
     if unseen_unseen:
         eval_sets["unseen_dom_unseen_id"] = unseen_unseen
 
     return train, eval_sets
-
 
 
 # ══════════════════════════════════════════════════════════════
