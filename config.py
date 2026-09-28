@@ -42,8 +42,8 @@ BASELINE_SPECS = [
      "extra": []},
     {"key": "mae", "name": "MAE",                      "script": "mae",
      "extra": []},
-    {"key": "dino", "name": "DINO",                    "script": "dino",
-     "extra": []},
+    {"key": "dino", "name": "DINO", "script": "dino", "extra": []},
+    {"key": "dinov2", "name": "DINOv2", "script": "dinov2", "extra": []},
     {"key": "jepa", "name": "JEPA",                    "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "0"]},
     {"key": "cjepa", "name": "C-JEPA",                 "script": "self",
@@ -332,6 +332,8 @@ def get_cfg(args=None):
     p.add_argument("--dino_script_path", type=str,
         default="dino-palm/main.py",
         help="Path to dino-palm's main.py. Only used with --run_all_baselines 1.")
+    p.add_argument("--dinov2_script_path", type=str, default="dinov2-palm/main.py",
+        help="Path to dinov2-palm's main.py. Only used with --run_all_baselines 1.")
     p.add_argument("--mae_script_path", type=str,
         default="mae-palm/main.py",
         help="Path to mae-palm's main.py. Only used with --run_all_baselines 1.")
