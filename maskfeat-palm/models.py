@@ -76,13 +76,15 @@ class MaskedViT(nn.Module):
         If mask is None, no substitution (plain feature extraction)."""
         B = x.size(0)
         z = self.proj(x).flatten(2).transpose(1, 2)   # (B, P, D)
-        z = z + self.pos_embed
+        #z = z + self.pos_embed
 
         if mask is not None:
             mask_tokens = self.mask_token.expand(B, z.size(1), -1)
             m = mask.unsqueeze(-1).float()
             z = z * (1 - m) + mask_tokens * m
-
+            
+        z = z + self.pos_embed
+        
         z = self.encoder(z)
         z = self.norm(z)
         return z
