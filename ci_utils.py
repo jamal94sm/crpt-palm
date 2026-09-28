@@ -434,6 +434,11 @@ def run_all_baselines(cfg):
             cmd = [sys.executable, dino_main] + shared + spec["extra"] + \
                   ["--output_name", out_name]
             cwd = os.path.dirname(dino_main)
+        elif spec["script"] == "dinov2":
+            dinov2_main = os.path.abspath(os.path.join(here, cfg.dinov2_script_path))
+            cmd = [sys.executable, dinov2_main] + shared + spec["extra"] + \
+                  ["--output_name", out_name]
+            cwd = os.path.dirname(dinov2_main)
             
         print(f"\n{'#'*80}\n  BASELINE: {spec['name']}")
         print(f"  CMD: {' '.join(cmd)}\n{'#'*80}\n")
