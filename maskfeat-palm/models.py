@@ -37,58 +37,36 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size):
 
 
 class MaskedViT(nn.Module):
-    """Same depth/heads auto-derive formula as ContextEncoder (verified
-    matching at embed_dim=256: depth=6, heads=8, 4.91M params) for a fair
-    parameter-count comparison against every other baseline."""
-
-    def __init__(self, image_size, num_patches, embed_dim,
-                 depth=None, num_heads=None, mlp_ratio=4.0):
+    def __init__(self, image_size, num_patches, embed_dim, depth=None, num_heads=None, mlp_ratio=4.0):
         super().__init__()
         H, W = image_size
-        patch_h = H // num_patches
-        patch_w = W // num_patches
-
-        if num_heads is None:
-            num_heads = max(4, embed_dim // 32)
-        if depth is None:
-            depth = min(6, embed_dim // 64 + 2)
-
-        self.grid_size = num_patches
-        self.proj = nn.Conv2d(3, embed_dim, kernel_size=(patch_h, patch_w),
-                              stride=(patch_h, patch_w))
-
-        pos = get_2d_sincos_pos_embed(embed_dim, num_patches)
-        self.pos_embed = nn.Parameter(torch.tensor(pos).float().unsqueeze(0),
-                                      requires_grad=False)
-
+        ph, pw = H // num_patches, W // num_patches
+        num_heads = num_heads or max(4, embed_dim // 32)
+        depth = depth or min(6, embed_dim // 64 + 2)
+        self.proj = nn.Conv2d(3, embed_dim, kernel_size=(ph, pw), stride=(ph, pw))
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.mask_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
         nn.init.trunc_normal_(self.mask_token, std=0.02)
-
-        enc = nn.TransformerEncoderLayer(
-            d_model=embed_dim, nhead=num_heads,
-            dim_feedforward=int(embed_dim * mlp_ratio),
-            batch_first=True, norm_first=True)
-        self.encoder = nn.TransformerEncoder(enc, depth)
+        # official: learnable pos_embed, one extra slot for CLS (MVIT.PATCH_2D + CLS_EMBED_ON: True)
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches * num_patches + 1, embed_dim))
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        enc = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads,
+                                         dim_feedforward=int(embed_dim * mlp_ratio),
+                                         dropout=0.0, batch_first=True, norm_first=True)
+        self.encoder = nn.TransformerEncoder(enc, depth, enable_nested_tensor=False)
         self.norm = nn.LayerNorm(embed_dim)
 
     def forward(self, x, mask=None):
-        """x: (B, 3, H, W). mask: (B, num_patches) bool, True = masked.
-        If mask is None, no substitution (plain feature extraction)."""
         B = x.size(0)
-        z = self.proj(x).flatten(2).transpose(1, 2)   # (B, P, D)
-        #z = z + self.pos_embed
-
+        z = self.proj(x).flatten(2).transpose(1, 2)                 # (B, P, D)
         if mask is not None:
-            mask_tokens = self.mask_token.expand(B, z.size(1), -1)
-            m = mask.unsqueeze(-1).float()
-            z = z * (1 - m) + mask_tokens * m
-            
-        z = z + self.pos_embed
-        
-        z = self.encoder(z)
-        z = self.norm(z)
-        return z
-
+            m = mask.unsqueeze(-1).to(z.dtype)
+            z = z * (1 - m) + self.mask_token.expand(B, z.size(1), -1) * m   # 1. substitute
+        cls = self.cls_token.expand(B, -1, -1)
+        z = torch.cat([cls, z], dim=1)                               # 2. prepend CLS
+        z = z + self.pos_embed                                       # 3. position LAST
+        return self.norm(self.encoder(z))[:, 1:]                     # patch tokens only
 
 class MaskFeatHead(nn.Module):
     """Single linear layer, matching official's LinearNeck exactly (no
