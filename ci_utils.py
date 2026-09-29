@@ -439,6 +439,11 @@ def run_all_baselines(cfg):
             cmd = [sys.executable, dinov2_main] + shared + spec["extra"] + \
                   ["--output_name", out_name]
             cwd = os.path.dirname(dinov2_main)
+        elif spec["script"] == "lejepa":
+            lejepa_main = os.path.abspath(os.path.join(here, cfg.lejepa_script_path))
+            cmd = [sys.executable, lejepa_main] + shared + spec["extra"] + \
+                  ["--output_name", out_name]
+            cwd = os.path.dirname(lejepa_main)
             
         print(f"\n{'#'*80}\n  BASELINE: {spec['name']}")
         print(f"  CMD: {' '.join(cmd)}\n{'#'*80}\n")
