@@ -444,6 +444,11 @@ def run_all_baselines(cfg):
             cmd = [sys.executable, lejepa_main] + shared + spec["extra"] + \
                   ["--output_name", out_name]
             cwd = os.path.dirname(lejepa_main)
+        elif spec["script"] == "capi":
+            capi_main = os.path.abspath(os.path.join(here, cfg.capi_script_path))
+            cmd = [sys.executable, capi_main] + shared + spec["extra"] + \
+                  ["--output_name", out_name]
+            cwd = os.path.dirname(capi_main)
             
         print(f"\n{'#'*80}\n  BASELINE: {spec['name']}")
         print(f"  CMD: {' '.join(cmd)}\n{'#'*80}\n")
