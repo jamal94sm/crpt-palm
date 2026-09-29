@@ -302,6 +302,37 @@ def get_cfg(args=None):
     p.add_argument("--cjepa_proj_hidden", type=int, default=None,
         help="C-JEPA projector hidden dim. Defaults to --embed_dim.")
 
+     
+    # ─── DMT-JEPA (Mo & Yun, arXiv:2405.17995) ──
+    p.add_argument("--use_dmtjepa", type=int, default=0, choices=[0, 1],
+        help="1 = replace raw target-block representations with "
+             "Masked-Semantic-Neighboring + Local-Aggregation-Target "
+             "discriminative targets (DMT-JEPA). Only the TARGET-side "
+             "aggregation is implemented -- this project's Predictor "
+             "cannot accept the paper's context-side s_x^LAT in place of "
+             "its per-patch input without an architecture change; see "
+             "dmtjepa_loss.py's module docstring.")
+    p.add_argument("--dmtjepa_window", type=int, default=3,
+        help="Neighborhood size (odd). Paper default 3x3. On this "
+             "project's small patch grid, a 3x3 window gives at most 8 "
+             "neighbor candidates even for interior patches -- keep "
+             "--dmtjepa_k <= 8 when using the default window.")
+    p.add_argument("--dmtjepa_k", type=int, default=4,
+        help="Number of top-similarity neighbors to aggregate per masked "
+             "patch. Paper's ablated best on a 14x14+ grid; likely needs "
+             "retuning downward for this project's smaller (e.g. 8x8) "
+             "grid, since a 3x3 window has only 8 total candidates there.")
+    p.add_argument("--dmtjepa_ema_momentum", type=float, default=0.996,
+        help="EMA momentum for target_agg_head, tracking context_agg_head "
+             "(same value as the encoder's own EMA by default).")
+    p.add_argument("--dmtjepa_ctx_weight", type=float, default=0.1,
+        help="Weight of the auxiliary context-head consistency term. "
+             "This term is NOT in the original paper -- see "
+             "dmtjepa_loss.py's context_consistency_loss docstring for "
+             "why it exists. Set to 0 to disable (not recommended: "
+             "target_agg_head would then never move from its random "
+             "initialization).")
+     
     # ─── Multi-seed CI aggregation ─────────────────────────────
     p.add_argument("--use_CI", type=int, default=0, choices=[0, 1],
         help="1 = run this exact config --n_runs times (seed, seed+1, ..., "
