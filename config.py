@@ -50,6 +50,7 @@ BASELINE_SPECS = [
      "extra": ["--method", "jepa", "--use_corruption", "0",
                "--use_dmtjepa", "1"]},
     {"key": "lejepa", "name": "LeJEPA", "script": "lejepa", "extra": []},
+    {"key": "capi", "name": "CAPI", "script": "capi", "extra": []},
     {"key": "cjepa", "name": "C-JEPA",                 "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "0",
                "--use_cjepa_reg", "1", "--cjepa_weight", "0.001",
@@ -389,6 +390,8 @@ def get_cfg(args=None):
         help="Path to barlowtwins-palm's main.py. Only used with --run_all_baselines 1.")
     p.add_argument("--lejepa_script_path", type=str, default="lejepa-palm/main.py",
         help="Path to lejepa-palm's main.py. Only used with --run_all_baselines 1.")
+    p.add_argument("--capi_script_path", type=str, default="capi-palm/main.py",
+        help="Path to capi-palm's main.py. Only used with --run_all_baselines 1.")
     p.add_argument("--combined_output_name", type=str, default=None,
         help="Filename (in --output_dir) for the combined comparison "
              "table. Defaults to 'ALL_BASELINES.txt'.")
