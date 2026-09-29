@@ -1,12 +1,15 @@
 """config.py -- MaskFeat on CASIA-MS palmprints.
 
-Optimizer/schedule verified against open-mmlab/mmpretrain's
-maskfeat_vit-base-p16_8xb256-amp-coslr-300e_in1k.py (fetched directly,
-2026-09-18): AdamW, betas=(0.9,0.999), wd=0.05, no-decay on bias/norm/
-mask_token, grad-clip max_norm=0.02, linear warmup -> cosine, mask
-ratio=0.4 (block-wise). HOG: nbins=9, pool adapted to 7 (see hog.py) for
-this project's 14px patch size (image_size=112, num_patches=8), gaussian_
-window adapted to 14 accordingly.
+Verified directly against the OFFICIAL facebookresearch/SlowFast release
+(configs/masked_ssl/in1k_VIT_B_MaskFeat_PT.yaml + slowfast/models/masked.py,
+cloned 2026-09-29): AdamW, wd=0.05, grad-clip L2 norm=0.02, mask ratio=0.4
+(block-wise), warmup 30/300 epochs = 0.1 ratio, CLS_EMBED_ON=True with a
+learnable position embedding (models.py's MaskedViT was fixed to match:
+mask-token substitution now happens BEFORE the position embedding is added,
+and a CLS token was added -- see models.py). HOG nbins/pool/gaussian_window
+still follow the open-mmlab/mmpretrain port's adaptation to this project's
+14px patch size, since the official HOG layer (slowfast/models/operators.py)
+doesn't fix pool/gaussian_window to specific values in the config itself.
 """
 
 import argparse
@@ -49,6 +52,10 @@ def get_cfg(args=None):
     p.add_argument("--hog_gaussian_window", type=int, default=14,
         help="Adapted from official's 16 to match this project's "
              "image_size/num_patches grid.")
+    p.add_argument("--eval_use_cls", type=int, default=0, choices=[0, 1],
+        help="1 = evaluate MaskedViT's CLS token (matches official "
+             "CLS_EMBED_ON: True). 0 (default) = mean-pool patch tokens, "
+             "matching every other baseline in this project's convention.")
 
     # ─── Optimizer (verified: AdamW, official values) ────────────
     p.add_argument("--base_lr", type=float, default=2e-4,
