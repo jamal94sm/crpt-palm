@@ -1,5 +1,5 @@
 """
-source_pretraining.py — Source-model pretraining with a method toggle.
+main.py
 
   --method jepa     : transformer + self-supervised (I-JEPA)   [original path]
   --method compnet  : CompNet CNN + supervised cross-entropy on training IDs
@@ -17,29 +17,20 @@ baseline exactly):
   --struct_mode a1/a2/both : Gabor line-structure auxiliary loss(es)
   --use_supervision 1 : supervised identity term (SupCon / ArcFace / CE) on
                         pooled context embeddings, using source-domain labels
-
-
-python source_pretraining.py --method compnet --data_dir /home/pai-ng/Jamal/CASIA-MS-ROI --mode cross_domain_openset --train_spectrums WHT --output_dir ./output_compnet
-
-
-nohup python source_pretraining.py --method vit_sup \
-  --data_dir /home/pai-ng/Jamal/CASIA-MS-ROI \
-  --mode cross_domain_openset --train_spectrums WHT \
-  --patch_size 14 --vit_depth 6 --vit_heads 8 \
-  --output_dir ./output_vitsup > SupViT.log 2>&1 &
-
-nohup python source_pretraining.py --method jepa \
-  --data_dir /home/pai-ng/Jamal/CASIA-MS-ROI \
-  --mode cross_domain_openset --train_spectrums WHT \
-  --struct_mode a1 --w_a1 0.3 \
-  --output_dir ./output_jepa_gabor > JepaGabor.log 2>&1 &
-
-nohup python source_pretraining.py --method jepa \
-  --data_dir /home/pai-ng/Jamal/XJTU-UP \
-  --mode cross_domain_openset --train_spectrums iPhone_Nature \
-  --use_corruption 1 --gabor_gray 0 --struct_mode a2 --struct_loss infonce --w_a2 0.3 \
-  --use_supervision 1 --sup_loss supcon --w_sup 0.1 --batch_size 256 \
-  --output_dir ./output_jepa_a2_supcon > JepaA2Supcon.log 2>&1 &
+  --use_cjepa_reg 1   : C-JEPA variance-invariance-covariance regularizer on
+                        the predictor's own outputs across target blocks
+                        (Mo & Tong, NeurIPS 2024, arXiv:2410.19560)
+  --use_dmtjepa 1     : DMT-JEPA discriminative targets -- replaces raw
+                        target-block representations with neighbor-
+                        aggregated ones via Masked Semantic Neighboring +
+                        a Local Aggregation Target cross-attention head
+                        (Mo & Yun, arXiv:2405.17995). Only the TARGET-side
+                        aggregation from the paper is implemented; see
+                        dmtjepa_loss.py's module docstring for why the
+                        paper's context-side s_x^LAT (which replaces the
+                        predictor's input) was not ported, since this
+                        project's Predictor has a fixed per-patch input
+                        interface incompatible with that substitution.
 
 """
 
@@ -67,6 +58,7 @@ from gabor import GaborBank, patch_energy_descriptor, sanity_report
 from struct_loss import structure_loss, grad_conflict_cosine
 from sup_loss import supcon_loss, build_sup_head
 from cjepa_loss import cjepa_regularizer, CJEPAProjector
+from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, context_consistency_loss
 from ci_utils import run_multi_seed
 
 CASIA_MEAN = [0.5, 0.5, 0.5]                    # matches dataset.py's Normalize()
@@ -273,6 +265,18 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
         cjepa_projector = CJEPAProjector(
             cfg.embed_dim, out_dim=cfg.cjepa_proj_dim,
             hidden=cfg.cjepa_proj_hidden).to(cfg.device)
+
+    use_dmtjepa = bool(getattr(cfg, "use_dmtjepa", False))
+    context_agg_head = target_agg_head = None
+    if use_dmtjepa:
+        context_agg_head = LocalAggregationHead(cfg.embed_dim).to(cfg.device)
+        target_agg_head = LocalAggregationHead(cfg.embed_dim).to(cfg.device)
+        target_agg_head.load_state_dict(context_agg_head.state_dict())
+        for p in target_agg_head.parameters():
+            p.requires_grad = False
+        print(f"  DMT-JEPA: window={cfg.dmtjepa_window} k={cfg.dmtjepa_k} "
+              f"ctx_weight={cfg.dmtjepa_ctx_weight}")
+
     n_tasks = 1 + int(use_a1) + int(use_a2) + int(use_sup)
     if use_struct or use_sup:
         if cfg.task_weighting == "uncertainty":
@@ -308,7 +312,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     print(f"  Corruption: {'ON' if getattr(cfg, 'use_corruption', 0) else 'OFF'}"
           f"  Structural: {'ON' if use_struct else 'OFF'}"
           f"  Supervision: {'ON' if use_sup else 'OFF'}"
-          f"  C-JEPA: {'ON' if use_cjepa else 'OFF'}")
+          f"  C-JEPA: {'ON' if use_cjepa else 'OFF'}"
+          f"  DMT-JEPA: {'ON' if use_dmtjepa else 'OFF'}")
 
     train_params = list(context_encoder.parameters()) + list(predictor.parameters())
     if predictor_structure is not None:
@@ -321,6 +326,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
         train_params += list(sup_head.parameters())
     if cjepa_projector is not None:
         train_params += list(cjepa_projector.parameters())
+    if context_agg_head is not None:
+        train_params += list(context_agg_head.parameters())
     if task_weighter is not None:
         train_params += list(task_weighter.parameters())
     opt = torch.optim.AdamW(train_params, lr=cfg.learning_rate,
@@ -356,6 +363,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             cjepa_projector.train()
         if predictor_structure is not None:
             predictor_structure.train()
+        if context_agg_head is not None:
+            context_agg_head.train()
 
         ep_loss = 0.0          # raw JEPA term only — comparable across runs
         ep_var = 0.0
@@ -393,9 +402,20 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
             with torch.no_grad():
                 tgt_full = target_encoder(images)
-                tgt_embeds = apply_masks(tgt_full, tgt_masks)
-                tgt_embeds = repeat_interleave_batch(
-                    tgt_embeds, B, repeat=len(ctx_masks))
+                if use_dmtjepa:
+                    lat_targets, dmt_valid = dmtjepa_targets(
+                        target_agg_head, tgt_full, tgt_masks,
+                        cfg.num_patches, cfg.dmtjepa_window, cfg.dmtjepa_k)
+                    tgt_embeds = torch.cat(
+                        [repeat_interleave_batch(t, B, repeat=len(ctx_masks))
+                         for t in lat_targets], dim=0)
+                    dmt_valid = torch.cat(
+                        [v.repeat(len(ctx_masks), 1) for v in dmt_valid], dim=0)
+                else:
+                    tgt_embeds = apply_masks(tgt_full, tgt_masks)
+                    tgt_embeds = repeat_interleave_batch(
+                        tgt_embeds, B, repeat=len(ctx_masks))
+                    dmt_valid = None
 
             # A2 queries either the shared predictor's second task token
             # (use_shared_predictor_trunk=1) or a completely separate
@@ -410,7 +430,16 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                 if use_a2:
                     struct_hidden = predictor_structure(ctx_embeds, ctx_masks, tgt_masks)
 
-            loss_jepa = F.smooth_l1_loss(pred_embeds, tgt_embeds)
+            if dmt_valid is not None:
+                loss_jepa = F.smooth_l1_loss(
+                    pred_embeds[dmt_valid], tgt_embeds[dmt_valid])
+            else:
+                loss_jepa = F.smooth_l1_loss(pred_embeds, tgt_embeds)
+
+            l_dmtctx = None
+            if use_dmtjepa and cfg.dmtjepa_ctx_weight > 0:
+                l_dmtctx = context_consistency_loss(
+                    context_agg_head, ctx_embeds, [t.detach() for t in lat_targets])
 
             l_cjepa = None
             if use_cjepa:
@@ -526,6 +555,9 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             if l_cjepa is not None:
                 loss = loss + cfg.cjepa_weight * l_cjepa
 
+            if l_dmtctx is not None:
+                loss = loss + cfg.dmtjepa_ctx_weight * l_dmtctx
+
             # ─── Gradient-conflict diagnostic on shared params ───
             # >0 complementary, ~0 orthogonal, <0 conflicting.
             if ((use_struct or use_sup) and cfg.log_conflict and n_bat == 0
@@ -548,6 +580,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
             momentum = get_momentum(global_step)
             update_ema(context_encoder, target_encoder, momentum)
+            if use_dmtjepa:
+                update_ema_head(context_agg_head, target_agg_head, cfg.dmtjepa_ema_momentum)
 
             global_step += 1
             ep_loss += loss_jepa.item()
