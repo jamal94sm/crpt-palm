@@ -85,7 +85,7 @@ def get_cfg(args=None):
 
     # ─── Training / eval ────────────────────────────────────────────────
     p.add_argument("--epochs", type=int, default=200)
-    p.add_argument("--batch_size", type=int, default=256)  # SHARED_ARG_NAMES compat; see --lejepa_batch_size
+    p.add_argument("--batch_size", type=int, default=64)  # SHARED_ARG_NAMES compat; see --lejepa_batch_size
     p.add_argument("--lejepa_batch_size", type=int, default=256,
         help="LeJEPA's OWN batch size, used in place of --batch_size for "
              "this baseline's DataLoader. Necessary because --run_all_"
