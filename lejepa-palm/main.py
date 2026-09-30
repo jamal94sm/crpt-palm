@@ -150,7 +150,7 @@ def train_lejepa(cfg, train_loader, eval_dict, out_path):
                         drop_last=True, pin_memory=(dev != "cpu"), collate_fn=multicrop_collate)
     niter = len(loader)
     if niter == 0:
-        raise SystemExit(f"batch_size={cfg.batch_size} > dataset length {len(mc_ds)}: no full batch")
+        raise SystemExit(f"lejepa_batch_size={cfg.lejepa_batch_size} > dataset length {len(mc_ds)}: no full batch")
 
     total = cfg.epochs * niter
     lr_sched = CosineScheduler(cfg.base_lr, cfg.min_lr, total, int(cfg.warmup_epochs_ratio * cfg.epochs) * niter)
