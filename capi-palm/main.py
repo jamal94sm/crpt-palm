@@ -223,7 +223,7 @@ def train_capi(cfg, train_loader, eval_dict, out_path):
             images = images.to(dev, non_blocking=True)
             B = images.size(0)
             lr = lr_sched[global_step]
-            momentum = cfg.teacher_momentum if cfg.teacher_momentum is not None else max(0.0, 1.0 - lr)
+            momentum = cfg.teacher_momentum if cfg.teacher_momentum is not None else min(cfg.teacher_momentum_floor, max(0.0, 1.0 - lr))
             for g in opt.param_groups:
                 g["lr"] = lr * g["lr_multiplier"]
                 g["weight_decay"] = cfg.weight_decay * g["wd_multiplier"]
