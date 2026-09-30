@@ -139,7 +139,12 @@ def train_lejepa(cfg, train_loader, eval_dict, out_path):
     n_par = sum(p.numel() for p in encoder.parameters())
     print(f" Encoder: {n_par/1e6:.2f}M params | views={n_views} ({n_global} global + {n_local} local) "
           f"| lambda={cfg.lejepa_lambda} | sigreg_slices={cfg.sigreg_num_slices}")
-
+    if cfg.lejepa_batch_size != cfg.batch_size:
+        print(f" NOTE: LeJEPA uses batch_size={cfg.lejepa_batch_size}, DIFFERENT from the "
+              f"--batch_size={cfg.batch_size} shared across other baselines in this sweep. "
+              f"See config.py's --lejepa_batch_size docstring: LeJEPA's prediction-loss "
+              f"gradient collapses at this project's usual small batch sizes.")
+        
     sigreg = SIGReg(cfg.sigreg_num_slices, cfg.sigreg_integration_bound, cfg.sigreg_num_points).to(dev)
 
     local_grid = max(2, round(grid * 6 / 16))
