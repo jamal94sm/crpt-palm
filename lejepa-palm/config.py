@@ -85,7 +85,7 @@ def get_cfg(args=None):
 
     # ─── Training / eval ────────────────────────────────────────────────
     p.add_argument("--epochs", type=int, default=200)
-    p.add_argument("--batch_size", type=int, default=64)
+    p.add_argument("--batch_size", type=int, default=256) # was 64
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--learning_rate", type=float, default=1e-3)  # SHARED_ARG_NAMES compat, UNUSED (see base_lr)
     p.add_argument("--warmup_ratio", type=float, default=0.1)    # SHARED_ARG_NAMES compat, UNUSED
