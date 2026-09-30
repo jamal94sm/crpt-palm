@@ -168,35 +168,92 @@ def update_ema_head(context_agg_head, target_agg_head, momentum):
         pt.data.mul_(momentum).add_(pc.data * (1.0 - momentum))
 
 
-def context_consistency_loss(context_agg_head, ctx_embeds, lat_targets_detached):
-    """Gives context_agg_head an actual training signal so its EMA copy
-    (target_agg_head) is not just frozen at its random initialization
-    forever. This is NOT part of the paper's Eq. 4/5 -- it is a minimal,
-    clearly-labeled addition needed because this integration does not use
-    the paper's s_x^LAT-replaces-predictor-input mechanism (see this
-    file's module docstring). context_agg_head aggregates the VISIBLE
-    context patches (using their own mean as the query, same shape
-    convention as Eq. 4's x_c) and is pulled toward the mean of this
-    step's already-computed PRE-REPEAT targets via a stop-gradient MSE --
-    purely so it learns a sensible context-side aggregation function,
-    analogous to the target head, rather than remaining at initialization.
 
-    ctx_embeds:          (B, N_ctx, D) -- context_encoder's output, ONE
-                          context mask (this project always uses exactly
-                          one context mask per image; see patchify()).
-    lat_targets_detached: list of (B, N_tgt, D) tensors, i.e. the
-                          dmtjepa_targets() return value BEFORE
-                          repeat_interleave_batch expands it across target
-                          blocks -- using the pre-repeat list keeps the
-                          batch dimension consistent with ctx_embeds' own
-                          B, rather than B * n_target_blocks.
 
-    If you do not want this term at all, pass --dmtjepa_ctx_weight 0
-    (see config.py); target_agg_head then stays at its EMA-tracked
-    initial weights, which does NOT match the paper's intent and is not
-    recommended -- the flag exists for ablation purposes only.
+# ══════════════════════════════════════════════════════════════
+#  DMTPredictor -- faithful architecture (paper Section 2.3, confirmed
+#  from arxiv.org/abs/2405.17995's own text + DMTJEPA/DMTJEPA repo README):
+#  "the predictor g_theta(.,.) takes as input the output of the context
+#  patch aggregation head s_x^a and a mask token for each patch to predict
+#  {m_j}_{j in B_i}" -- s_x^LAT is a SINGLE pooled vector (paper: "x_c
+#  denotes the AVERAGED embeddings ... only unmasked patches in the
+#  context encoder"), not a per-patch sequence. This is why DMT-JEPA
+#  cannot reuse this project's shared Predictor class (whose context
+#  argument must be a per-patch sequence aligned with context_masks) --
+#  a SEPARATE predictor class is the faithful integration, not a
+#  modification of Predictor (which JEPA/C-JEPA/SA-JEPA all still share
+#  unchanged).
+# ══════════════════════════════════════════════════════════════
+import torch.nn as _nn
+from models import _gather
+
+
+class DMTPredictor(_nn.Module):
+    """Single-pooled-context predictor, faithful to DMT-JEPA's real
+    architecture. context_agg_head is called INSIDE this module's forward
+    (not as a side computation with its own loss) so its gradient comes
+    entirely from the main JEPA loss backpropagating through this
+    predictor -- exactly matching the paper, and structurally impossible
+    to have the gradient-leak bug the earlier auxiliary-loss version had,
+    since there is no separate loss term at all.
+
+    Capacity matches this project's Predictor convention: pred_dim=128,
+    depth=6, num_heads=2, fixed 2-D sin-cos position embedding for target
+    positions (context has no position embedding here, since it's a
+    single pooled vector with no spatial index of its own).
     """
-    query = ctx_embeds.mean(dim=1, keepdim=True)
-    ctx_lat = context_agg_head(query, ctx_embeds)                        # (B, D)
-    target_ref = torch.stack([t.mean(dim=1) for t in lat_targets_detached], dim=0).mean(dim=0)  # (B, D)
-    return F.mse_loss(ctx_lat, target_ref)
+
+    def __init__(self, num_patches, embed_dim, context_agg_head, norm_struct_out=True):
+        super().__init__()
+        pred_dim = 128
+        depth = 6
+        num_heads = 2
+
+        self.context_agg_head = context_agg_head        # h_theta, trained via THIS predictor's loss only
+        self.ctx_in_proj = _nn.Linear(embed_dim, pred_dim)   # projects s_x^LAT (B, D) -> (B, pred_dim)
+        self.mask_token = _nn.Parameter(torch.zeros(1, 1, pred_dim))
+        self.out_proj = _nn.Linear(pred_dim, embed_dim)
+
+        pos = get_2d_sincos_pos_embed_(pred_dim, num_patches)
+        self.pos_embed = _nn.Parameter(torch.tensor(pos).float().unsqueeze(0), requires_grad=False)
+
+        enc = torch.nn.TransformerEncoderLayer(d_model=pred_dim, nhead=num_heads,
+                                               dim_feedforward=pred_dim * 4,
+                                               batch_first=True, norm_first=True)
+        self.encoder = torch.nn.TransformerEncoder(enc, depth)
+        self.norm = _nn.LayerNorm(pred_dim)
+
+    def forward(self, ctx_embeds, target_masks):
+        """ctx_embeds: (B, N_ctx, D) -- the SAME visible-patch context
+        embeddings this project's other JEPA baselines already compute
+        (context_agg_head pools them internally into s_x^LAT here, this
+        is NOT done by the caller). target_masks: list of (B, N_tgt)
+        flat patch-index tensors, same convention as patchify()'s output.
+
+        Returns: list of (B, N_tgt, D) predictions, one per target block
+        -- same per-block list shape the caller already expects from the
+        shared Predictor, so train_jepa's downstream code (repeat_
+        interleave_batch, loss computation) needs minimal changes.
+        """
+        B = ctx_embeds.size(0)
+        query = ctx_embeds.mean(dim=1, keepdim=True)             # (B, 1, D) -- paper's x_c
+        s_x_lat = self.context_agg_head(query, ctx_embeds)        # (B, D) -- paper's s_x^LAT, GRADIENT FLOWS THROUGH
+        ctx_tok = self.ctx_in_proj(s_x_lat).unsqueeze(1)          # (B, 1, pred_dim)
+
+        preds = []
+        for m in target_masks:
+            N_tgt = m.size(1)
+            pos_tgt = _gather(self.pos_embed.expand(B, -1, -1), m)   # (B, N_tgt, pred_dim)
+            mask_tok = self.mask_token.expand(B, N_tgt, -1) + pos_tgt
+            x = torch.cat([ctx_tok, mask_tok], dim=1)                 # (B, 1+N_tgt, pred_dim)
+            x = self.norm(self.encoder(x))
+            preds.append(self.out_proj(x[:, 1:]))                     # (B, N_tgt, D) -- drop the ctx token
+        return preds
+
+
+def get_2d_sincos_pos_embed_(embed_dim, grid_size):
+    """Local alias so this file has no import-order dependency on models.py
+    at module-load time (avoids a circular import if dmtjepa_loss.py is
+    ever imported before models.py in some call site)."""
+    from models import get_2d_sincos_pos_embed
+    return get_2d_sincos_pos_embed(embed_dim, grid_size)
