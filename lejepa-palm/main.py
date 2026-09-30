@@ -146,7 +146,7 @@ def train_lejepa(cfg, train_loader, eval_dict, out_path):
     mc_ds = MultiCropDataset(train_loader.dataset.samples, train_loader.dataset.id_map, cfg.img_size,
                              cfg.aug_multiplier, cfg.global_crops_scale, cfg.local_crops_scale,
                              n_local, local_size=local_grid * patch_px)
-    loader = DataLoader(mc_ds, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers,
+    loader = DataLoader(mc_ds, batch_size=cfg.lejepa_batch_size, shuffle=True, num_workers=cfg.num_workers,
                         drop_last=True, pin_memory=(dev != "cpu"), collate_fn=multicrop_collate)
     niter = len(loader)
     if niter == 0:
