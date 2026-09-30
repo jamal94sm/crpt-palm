@@ -58,7 +58,8 @@ from gabor import GaborBank, patch_energy_descriptor, sanity_report
 from struct_loss import structure_loss, grad_conflict_cosine
 from sup_loss import supcon_loss, build_sup_head
 from cjepa_loss import cjepa_regularizer, CJEPAProjector
-from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, context_consistency_loss
+#from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, context_consistency_loss
+from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, DMTPredictor
 from ci_utils import run_multi_seed
 
 CASIA_MEAN = [0.5, 0.5, 0.5]                    # matches dataset.py's Normalize()
@@ -193,9 +194,6 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
         img_size, cfg.num_patches, cfg.embed_dim).to(cfg.device)
     target_encoder = TargetEncoder(
         img_size, cfg.num_patches, cfg.embed_dim).to(cfg.device)
-    predictor = Predictor(
-        cfg.num_patches, cfg.embed_dim,
-        norm_struct_out=bool(cfg.norm_struct_out)).to(cfg.device)
 
     for pc, pt in zip(context_encoder.parameters(),
                       target_encoder.parameters()):
@@ -204,9 +202,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
         p.requires_grad = False
 
     n_ctx = sum(p.numel() for p in context_encoder.parameters())
-    n_pred = sum(p.numel() for p in predictor.parameters())
     print(f"  Context encoder: {n_ctx/1e6:.2f}M params")
-    print(f"  Predictor: {n_pred/1e6:.2f}M params")
 
     # ─── Structural auxiliary tasks (A1 = visible, A2 = hidden) ───
     use_a1 = bool(getattr(cfg, "use_a1", False))
@@ -216,9 +212,37 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     gabor_bank = struct_head = struct_head_a2 = task_weighter = None
     predictor_structure = None
 
+    # ─── DMT-JEPA (Mo & Yun, arXiv:2405.17995) -- FAITHFUL architecture ───
+    # context_agg_head is built FIRST here since DMTPredictor takes it as a
+    # constructor arg and calls it INSIDE its own forward pass -- there is
+    # no separate auxiliary loss anywhere; context_agg_head's only gradient
+    # source is the main JEPA loss backpropagating through DMTPredictor,
+    # exactly matching the paper's "s_x^LAT is the predictor's input" design.
+    use_dmtjepa = bool(getattr(cfg, "use_dmtjepa", False))
+    context_agg_head = target_agg_head = None
+    if use_dmtjepa:
+        context_agg_head = LocalAggregationHead(cfg.embed_dim).to(cfg.device)
+        target_agg_head = LocalAggregationHead(cfg.embed_dim).to(cfg.device)
+        target_agg_head.load_state_dict(context_agg_head.state_dict())
+        for p in target_agg_head.parameters():
+            p.requires_grad = False
+        predictor = DMTPredictor(
+            cfg.num_patches, cfg.embed_dim,
+            context_agg_head=context_agg_head).to(cfg.device)
+        print(f"  DMT-JEPA: window={cfg.dmtjepa_window} k={cfg.dmtjepa_k} "
+              f"(faithful architecture -- context_agg_head trains via the "
+              f"main loss only, no auxiliary term)")
+    else:
+        predictor = Predictor(
+            cfg.num_patches, cfg.embed_dim,
+            norm_struct_out=bool(cfg.norm_struct_out)).to(cfg.device)
+
+    n_pred = sum(p.numel() for p in predictor.parameters())
+    print(f"  Predictor: {n_pred/1e6:.2f}M params")
+
     print(f"  Predictor trunk mode: "
           f"{'SHARED (A2 via 2nd task token)' if use_shared_predictor_trunk else 'SEPARATE'}")
-    if use_a2 and not use_shared_predictor_trunk:
+    if use_a2 and not use_shared_predictor_trunk and not use_dmtjepa:
         predictor_structure = StructurePredictor(
             cfg.num_patches, cfg.embed_dim,
             norm_struct_out=bool(cfg.norm_struct_out)).to(cfg.device)
@@ -266,17 +290,6 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             cfg.embed_dim, out_dim=cfg.cjepa_proj_dim,
             hidden=cfg.cjepa_proj_hidden).to(cfg.device)
 
-    use_dmtjepa = bool(getattr(cfg, "use_dmtjepa", False))
-    context_agg_head = target_agg_head = None
-    if use_dmtjepa:
-        context_agg_head = LocalAggregationHead(cfg.embed_dim).to(cfg.device)
-        target_agg_head = LocalAggregationHead(cfg.embed_dim).to(cfg.device)
-        target_agg_head.load_state_dict(context_agg_head.state_dict())
-        for p in target_agg_head.parameters():
-            p.requires_grad = False
-        print(f"  DMT-JEPA: window={cfg.dmtjepa_window} k={cfg.dmtjepa_k} "
-              f"ctx_weight={cfg.dmtjepa_ctx_weight}")
-
     n_tasks = 1 + int(use_a1) + int(use_a2) + int(use_sup)
     if use_struct or use_sup:
         if cfg.task_weighting == "uncertainty":
@@ -315,6 +328,10 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
           f"  C-JEPA: {'ON' if use_cjepa else 'OFF'}"
           f"  DMT-JEPA: {'ON' if use_dmtjepa else 'OFF'}")
 
+    # NOTE: context_agg_head is now a SUBMODULE of predictor (DMTPredictor
+    # holds it directly) when use_dmtjepa -- list(predictor.parameters())
+    # already includes it. Do NOT add it separately here, or its
+    # parameters will be double-registered in the optimizer.
     train_params = list(context_encoder.parameters()) + list(predictor.parameters())
     if predictor_structure is not None:
         train_params += list(predictor_structure.parameters())
@@ -326,8 +343,6 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
         train_params += list(sup_head.parameters())
     if cjepa_projector is not None:
         train_params += list(cjepa_projector.parameters())
-    if context_agg_head is not None:
-        train_params += list(context_agg_head.parameters())
     if task_weighter is not None:
         train_params += list(task_weighter.parameters())
     opt = torch.optim.AdamW(train_params, lr=cfg.learning_rate,
@@ -363,8 +378,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             cjepa_projector.train()
         if predictor_structure is not None:
             predictor_structure.train()
-        if context_agg_head is not None:
-            context_agg_head.train()
+        # context_agg_head is inside predictor now -- predictor.train()
+        # above already covers it; no separate .train() call needed.
 
         ep_loss = 0.0          # raw JEPA term only — comparable across runs
         ep_var = 0.0
@@ -417,12 +432,18 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                         tgt_embeds, B, repeat=len(ctx_masks))
                     dmt_valid = None
 
-            # A2 queries either the shared predictor's second task token
-            # (use_shared_predictor_trunk=1) or a completely separate
-            # StructurePredictor (use_shared_predictor_trunk=0) -- in the
-            # latter case, appearance is a normal single-task forward pass.
+            # DMT-JEPA uses its own predictor signature (single pooled
+            # context vector, built internally from ctx_embeds) -- it never
+            # takes ctx_masks, and never participates in the A1/A2
+            # structural-task machinery (predict_structure is JEPA/C-JEPA/
+            # SA-JEPA-only, via the shared Predictor class).
             struct_hidden = None
-            if use_a2 and use_shared_predictor_trunk:
+            if use_dmtjepa:
+                preds_list = predictor(ctx_embeds, tgt_masks)               # list of (B, N_tgt, D)
+                pred_embeds = torch.cat(
+                    [repeat_interleave_batch(p, B, repeat=len(ctx_masks))
+                     for p in preds_list], dim=0)
+            elif use_a2 and use_shared_predictor_trunk:
                 pred_embeds, struct_hidden = predictor(
                     ctx_embeds, ctx_masks, tgt_masks, predict_structure=True)
             else:
@@ -435,11 +456,6 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                     pred_embeds[dmt_valid], tgt_embeds[dmt_valid])
             else:
                 loss_jepa = F.smooth_l1_loss(pred_embeds, tgt_embeds)
-
-            l_dmtctx = None
-            if use_dmtjepa and cfg.dmtjepa_ctx_weight > 0:
-                l_dmtctx = context_consistency_loss(
-                    context_agg_head, ctx_embeds, [t.detach() for t in lat_targets])
 
             l_cjepa = None
             if use_cjepa:
@@ -554,9 +570,6 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             
             if l_cjepa is not None:
                 loss = loss + cfg.cjepa_weight * l_cjepa
-
-            if l_dmtctx is not None:
-                loss = loss + cfg.dmtjepa_ctx_weight * l_dmtctx
 
             # ─── Gradient-conflict diagnostic on shared params ───
             # >0 complementary, ~0 orthogonal, <0 conflicting.
