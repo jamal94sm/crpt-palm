@@ -76,6 +76,13 @@ def get_cfg(args=None):
     p.add_argument("--learning_rate", type=float, default=1e-3)  # SHARED_ARG_NAMES compat, UNUSED
     p.add_argument("--warmup_ratio", type=float, default=0.1)    # SHARED_ARG_NAMES compat, UNUSED
     p.add_argument("--eval_every", type=int, default=10)
+    p.add_argument("--teacher_momentum_floor", type=float, default=0.98,
+        help="ADAPTED (not in official CAPI): floor on teacher EMA momentum "
+             "independent of --min_lr. Official rule momentum=1-lr saturates "
+             "the teacher near 1.0 whenever the LR schedule decays close to "
+             "--min_lr, effectively freezing the teacher for the back "
+             "portion of training -- this floor keeps some student-to-"
+             "teacher tracking active for the full run instead.")
 
     p.add_argument("--seed", type=int, default=2025)
     p.add_argument("--device", default="cuda")
