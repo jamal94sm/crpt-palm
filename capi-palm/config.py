@@ -35,7 +35,7 @@ def get_cfg(args=None):
              "for this project's much smaller encoder.")
 
     p.add_argument("--mask_ratio", type=float, default=0.65, help="Paper's own value (Table 1e ablation optimum).")
-    p.add_argument("--prediction_subsampling", type=float, default=0.055,
+    p.add_argument("--prediction_subsampling", type=float, default=0.2,
         help="Fraction of MASKED tokens to predict per image (source's "
              "data.py: n_predict = int(n_masked * prediction_subsampling), "
              "NOT a fixed count -- an earlier version of this baseline "
@@ -47,18 +47,31 @@ def get_cfg(args=None):
     p.add_argument("--mask_roll", type=int, default=1, choices=[0, 1], help="Paper's own '+roll' fix (Section 4.2).")
     p.add_argument("--crop_scale", type=float, nargs=2, default=[0.6, 1.0], help="Paper's own optimum (Table 1d).")
 
-    p.add_argument("--num_prototypes", type=int, default=2048,
+    p.add_argument("--num_prototypes", type=int, default=8192,
         help="ADAPTED. Paper: 16384 (Table 7), tuned for ViT-L/inet1k. "
-             "Scaled down to match this project's DINOv2-palm baseline's "
-             "own 8*embed_dim convention for prototype count at this scale.")
-    p.add_argument("--n_sk_iter", type=int, default=3, help="Paper's own value.")
+             "Raised from an earlier 2048 default (originally matched to "
+             "this project's DINOv2-palm baseline's 8*embed_dim "
+             "convention, for cross-baseline fairness) to 8192 after "
+             "confirming empirically on this project's data that more "
+             "prototypes meaningfully improves seen_dom_seen_id and "
+             "unseen_dom_seen_id R1 with no instability -- see the "
+             "2026-09-XX 2048-vs-8192 comparison run. NOT fair against "
+             "other baselines' capacity-matched defaults; use --num_"
+             "prototypes 2048 explicitly if reproducing the fair-"
+             "comparison sweep.")
+    p.add_argument("--n_sk_iter", type=int, default=5,
+        help="ADAPTED from the paper's own value of 3, for better-"
+             "converged Sinkhorn-Knopp target assignments.")
     p.add_argument("--target_temp", type=float, default=0.06, help="Paper's own value (Table 7).")
     p.add_argument("--pred_temp", type=float, default=0.12, help="Paper's own value (Table 7, 'student temperature').")
     p.add_argument("--positionwise_sk", type=int, default=1, choices=[0, 1],
         help="Paper's own fix for positional collapse (Section 3.1). Leave ON.")
 
     p.add_argument("--base_lr", type=float, default=1e-3, help="Paper's own value (Table 7).")
-    p.add_argument("--min_lr", type=float, default=1e-6)
+    p.add_argument("--min_lr", type=float, default=5e-5,
+        help="ADAPTED from 1e-6. Raised so --teacher_momentum_floor has "
+             "room to matter -- at 1e-6 the derived momentum (1-lr) "
+             "already saturates near 1.0 regardless of the floor.")
     p.add_argument("--weight_decay", type=float, default=0.1, help="Paper's own value (Table 7).")
     p.add_argument("--adamw_beta1", type=float, default=0.9)
     p.add_argument("--adamw_beta2", type=float, default=0.95, help="Paper's own value (Table 7).")
