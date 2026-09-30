@@ -85,7 +85,17 @@ def get_cfg(args=None):
 
     # ─── Training / eval ────────────────────────────────────────────────
     p.add_argument("--epochs", type=int, default=200)
-    p.add_argument("--batch_size", type=int, default=256) # was 64
+    p.add_argument("--batch_size", type=int, default=64)  # SHARED_ARG_NAMES compat; see --lejepa_batch_size
+    p.add_argument("--lejepa_batch_size", type=int, default=256,
+        help="LeJEPA's OWN batch size, used in place of --batch_size for "
+             "this baseline's DataLoader. Necessary because --run_all_"
+             "baselines forwards --batch_size uniformly to every baseline "
+             "via SHARED_ARG_NAMES, which silently overrides any default "
+             "set on --batch_size itself. LeJEPA's prediction-loss "
+             "gradient scales inversely with batch size and collapses at "
+             "this project's usual sweep batch size (16-64) -- see "
+             "main.py's docstring. Paper's own validated floor is 128; "
+             "256 chosen here for extra margin.")
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--learning_rate", type=float, default=1e-3)  # SHARED_ARG_NAMES compat, UNUSED (see base_lr)
     p.add_argument("--warmup_ratio", type=float, default=0.1)    # SHARED_ARG_NAMES compat, UNUSED
