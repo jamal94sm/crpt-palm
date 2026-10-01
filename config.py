@@ -338,6 +338,21 @@ def get_cfg(args=None):
              "target_agg_head would then never move from its random "
              "initialization).")
      
+    # ─── Masking strategy (JEPA-family "self" baselines) ───────
+    p.add_argument("--mask_mode", default="random", choices=["random", "line_guided"],
+        help="'random' = original I-JEPA multi-block target placement. "
+             "'line_guided' = target-block centres drawn from "
+             "p(i) = (1-eps)*softmax(s_i/tau) + eps/P, where s is a per-patch "
+             "Gabor line-saliency score (see line_masking.py). Block size/"
+             "shape/count and the context block are unchanged.")
+    p.add_argument("--line_mask_eps", type=float, default=0.5,
+        help="Uniform-mixing weight in [0,1]. 1.0 = uniform placement "
+             "(same as random); 0.0 = pure saliency sampling. Keeps every "
+             "patch a possible target centre (floor eps/P).")
+    p.add_argument("--line_mask_tau", type=float, default=0.5,
+        help="Softmax temperature (>0) on the z-scored saliency. Smaller = "
+             "targets concentrate harder on line patches.")
+     
     # ─── Multi-seed CI aggregation ─────────────────────────────
     p.add_argument("--use_CI", type=int, default=0, choices=[0, 1],
         help="1 = run this exact config --n_runs times (seed, seed+1, ..., "
@@ -430,6 +445,11 @@ def get_cfg(args=None):
     p.add_argument("--output_dir", default="./output_jepa")
 
     cfg = p.parse_args(args)
+
+    if not (0.0 <= cfg.line_mask_eps <= 1.0):
+        raise SystemExit(f"--line_mask_eps must be in [0, 1], got {cfg.line_mask_eps}")
+    if cfg.line_mask_tau <= 0:
+        raise SystemExit(f"--line_mask_tau must be > 0, got {cfg.line_mask_tau}")
 
     # ─── Resolve legacy --use_gabor into --struct_mode ────────
     # --use_gabor 1 (with struct_mode left at "none") == --struct_mode a1,
