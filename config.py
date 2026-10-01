@@ -60,6 +60,13 @@ BASELINE_SPECS = [
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
                "--w_a2", "0.3"]},
+    {"key": "palmjepa_lg", "name": "SA-JEPA-LG", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3",
+               "--mask_mode", "line_guided",
+               "--line_mask_eps", "0.5", "--line_mask_tau", "0.5"]},
 ]
 
 SHARED_ARG_NAMES = ["data_dir", "mode", "embed_dim", "num_patches", "epochs",
