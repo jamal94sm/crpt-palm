@@ -58,6 +58,7 @@ from gabor import GaborBank, patch_energy_descriptor, sanity_report
 from struct_loss import structure_loss, grad_conflict_cosine
 from sup_loss import supcon_loss, build_sup_head
 from cjepa_loss import cjepa_regularizer, CJEPAProjector
+from line_masking import line_saliency, patchify_line_guided, target_topq_fraction
 #from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, context_consistency_loss
 from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, DMTPredictor
 from ci_utils import run_multi_seed
@@ -272,6 +273,18 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
         if struct_head_a2 is not struct_head:
             n_sh += sum(p.numel() for p in struct_head_a2.parameters())
 
+    # ─── Line-guided target masking (option) ───
+    use_line_mask = (getattr(cfg, "mask_mode", "random") == "line_guided")
+    if use_line_mask and gabor_bank is None:
+        gabor_bank = GaborBank(
+            n_orient=cfg.gabor_orient,
+            scales=cfg.gabor_scales,
+            gamma=cfg.gabor_gamma,
+            per_channel=not bool(getattr(cfg, "gabor_gray", 1)),
+        ).to(cfg.device)
+    print(f"  Masking: {cfg.mask_mode}"
+          + (f"  (eps={cfg.line_mask_eps}, tau={cfg.line_mask_tau})" if use_line_mask else ""))
+
     # ─── Supervised identity term (uses source-domain labels) ─────
     use_sup = bool(getattr(cfg, "use_supervision", 0)) and cfg.w_sup > 0
     sup_head = None
@@ -391,6 +404,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
         ep_cjepa = ep_cjepa_sim = ep_cjepa_std = ep_cjepa_cov = 0.0
         n_cjepa = 0
         ep_conflict = float("nan")
+        ep_topq = 0.0          # diagnostic: targets in top-25% line saliency
+        n_topq = 0
         n_bat = 0
         t0 = time.time()
 
@@ -399,11 +414,32 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             labels = labels.to(cfg.device)
             B = images.size(0)
 
-            ctx_masks, tgt_masks = patchify(
-                B, cfg.num_patches, cfg.num_blocks,
-                trg_ratio=tuple(cfg.trg_ratio),
-                ctx_ratio=tuple(cfg.ctx_ratio),
-                device=cfg.device)
+            # Raw Gabor responses of the CLEAN image, computed once and reused by
+            # the A2 descriptor below. Only exists when a Gabor bank is built
+            # (struct branch and/or line-guided masking).
+            gabor_resp = saliency = None
+            if gabor_bank is not None:
+                with torch.no_grad():
+                    gabor_resp = gabor_bank(images)
+                    saliency = line_saliency(gabor_resp, cfg.num_patches)
+
+            if use_line_mask:
+                ctx_masks, tgt_masks = patchify_line_guided(
+                    saliency, B, cfg.num_patches, cfg.num_blocks,
+                    trg_ratio=tuple(cfg.trg_ratio),
+                    ctx_ratio=tuple(cfg.ctx_ratio),
+                    eps=cfg.line_mask_eps, tau=cfg.line_mask_tau,
+                    device=cfg.device)
+            else:
+                ctx_masks, tgt_masks = patchify(
+                    B, cfg.num_patches, cfg.num_blocks,
+                    trg_ratio=tuple(cfg.trg_ratio),
+                    ctx_ratio=tuple(cfg.ctx_ratio),
+                    device=cfg.device)
+
+            if saliency is not None:
+                ep_topq += target_topq_fraction(saliency, tgt_masks)
+                n_topq += 1
 
             if cfg.use_corruption:
                 images_ctx = corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD)
@@ -473,7 +509,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             if use_struct:
                 with torch.no_grad():
                     desc = patch_energy_descriptor(
-                        gabor_bank(images), cfg.num_patches)   # CLEAN image
+                        gabor_resp, cfg.num_patches)   # CLEAN image (raw responses from above)
 
                 if use_a1:
                     t_a1 = apply_masks(desc, ctx_masks)        # visible patches
@@ -614,6 +650,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
         ep_cjepa_sim /= max(n_cjepa, 1)
         ep_cjepa_std /= max(n_cjepa, 1)
         ep_cjepa_cov /= max(n_cjepa, 1)
+        ep_topq /= max(n_topq, 1)
         elapsed = time.time() - t0
         lr_now = scheduler.get_last_lr()[0]
 
@@ -641,7 +678,11 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             if use_cjepa:
                 print(f"    C-JEPA: loss={ep_cjepa:.4f} sim={ep_cjepa_sim:.4f} "
                       f"std={ep_cjepa_std:.4f} cov={ep_cjepa_cov:.4f}")
-  
+
+            if n_topq > 0:
+                print(f"           masking={cfg.mask_mode}: targets in top-25% line "
+                      f"saliency = {ep_topq:.3f}  (compare to a mask_mode=random run)")
+              
             if (use_struct or use_sup) and cfg.log_conflict:
                 msg = f"           conflict_cos={ep_conflict:+.4f}"
                 if task_weighter is not None:
