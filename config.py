@@ -359,6 +359,9 @@ def get_cfg(args=None):
     p.add_argument("--line_mask_tau", type=float, default=0.5,
         help="Softmax temperature (>0) on the z-scored saliency. Smaller = "
              "targets concentrate harder on line patches.")
+    p.add_argument("--line_mask_select", type=int, default=0,
+        help="1 = multiply line energy by orientation selectivity (max/mean). "
+             "Off by default: it is biased upward on border patches.")
      
     # ─── Multi-seed CI aggregation ─────────────────────────────
     p.add_argument("--use_CI", type=int, default=0, choices=[0, 1],
