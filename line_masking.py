@@ -23,6 +23,8 @@ Return signature is identical to models.patchify: ([ctx (B,Nc)], [tgt_k (B,Nt)])
 """
 import math
 import torch
+# Two saliency modes: line_saliency (Gabor energy) and ridge_saliency (Hessian
+# crease detection -> per-patch line-pixel density). Both return (B, P) z-scores.
 import torch.nn.functional as F
 
 
@@ -43,7 +45,7 @@ def padded_responses(gabor_bank, images, pad=None):
     return r[..., pad:pad + H, pad:pad + W]
 
 
-def line_saliency(gabor_resp, grid, border=0, use_selectivity=False):
+def line_saliency(gabor_resp, grid, border=0, use_selectivity=False, clip=2.0):
     """gabor_resp: raw Gabor responses (B, K, H, W) straight from gabor_bank(images).
     Returns per-patch saliency (B, grid*grid), z-scored within each image,
     in the SAME row-major patch order as the encoder (index = row*grid + col).
@@ -54,7 +56,12 @@ def line_saliency(gabor_resp, grid, border=0, use_selectivity=False):
     use_selectivity: False (default) -> s = sum_k e_k (line energy).
             True -> s = energy * (max_k e_k / mean_k e_k). The selectivity factor
             is biased upward on border patches (fewer valid pixels -> noisier max),
-            so it is off by default."""
+            so it is off by default.
+    clip: the z-scores are clipped to [-clip, clip] (None = no clipping). Real palms
+            have heavy-tailed saliency (fingers, a deep fold): unclipped, softmax(s/tau)
+            can put ~99% of the guided mass on ONE patch, so every guided target lands
+            in the same place. Clipping keeps the preference for line patches but
+            spreads it over all of them."""
     if gabor_resp.dim() != 4:
         raise ValueError(
             f"line_saliency expects raw Gabor responses of shape (B, K, H, W), "
@@ -74,7 +81,74 @@ def line_saliency(gabor_resp, grid, border=0, use_selectivity=False):
     s = e.sum(-1)
     if use_selectivity:
         s = s * (e.max(-1).values / (e.mean(-1) + 1e-6))
-    return (s - s.mean(1, keepdim=True)) / (s.std(1, keepdim=True) + 1e-6)
+    s = (s - s.mean(1, keepdim=True)) / (s.std(1, keepdim=True) + 1e-6)
+    if clip is not None:
+        s = s.clamp(-clip, clip)
+    return s
+
+
+def _gauss_deriv_kernels(sigma, device, dtype):
+    """Scale-normalised 2nd-derivative-of-Gaussian kernels (Kxx, Kyy, Kxy), shape (3,1,k,k).
+    Truncated at 3 sigma; matches scipy.ndimage.gaussian_filter(order=...) * sigma^2."""
+    r = int(math.ceil(3 * sigma))
+    t = torch.arange(-r, r + 1, dtype=torch.float64)
+    g = torch.exp(-t ** 2 / (2 * sigma ** 2)); g = g / g.sum()
+    g1 = -t / sigma ** 2 * g
+    g2 = (t ** 2 / sigma ** 4 - 1 / sigma ** 2) * g; g2 = g2 - g2.mean()      # zero response to flat/linear
+    kxx = torch.outer(g, g2); kyy = torch.outer(g2, g); kxy = torch.outer(g1, g1)
+    return (torch.stack([kxx, kyy, kxy])[:, None] * sigma ** 2).to(device=device, dtype=dtype), r
+
+
+@torch.no_grad()
+def ridge_line_map(images, sigmas=(1.0, 1.5, 2.0)):
+    """Dark-line (crease) strength per pixel from the Hessian of the grayscale image.
+    images: (B,3,H,W) normalised as in dataset.py. Returns (R (B,1,H,W), border px).
+    Across a dark line the intensity curves upward (largest eigenvalue l1 > 0); along
+    it the image is flat (l2 ~ 0). R = max(l1 - |l2|, 0), maximised over scales, so
+    blobs (both eigenvalues large) and flat skin score ~0."""
+    gray = images.float().mean(1, keepdim=True)
+    best, border = None, 0
+    for s in sigmas:
+        k, r = _gauss_deriv_kernels(s, gray.device, gray.dtype)
+        h = F.conv2d(gray, k, padding=r)                          # (B,3,H,W): Hxx, Hyy, Hxy
+        hxx, hyy, hxy = h[:, 0:1], h[:, 1:2], h[:, 2:3]
+        root = torch.sqrt((hxx - hyy) ** 2 + 4 * hxy ** 2 + 1e-12)
+        l1 = (hxx + hyy + root) / 2; l2 = (hxx + hyy - root) / 2
+        resp = (l1 - l2.abs()).clamp_min(0)
+        best = resp if best is None else torch.maximum(best, resp)
+        border = max(border, r)
+    return best, border
+
+
+@torch.no_grad()
+def ridge_saliency(images, grid, sigmas=(1.0, 1.5, 2.0), line_frac=0.10, clip=2.0, return_lines=False):
+    """Edge/line-detection saliency: detect crease pixels, then score each patch by
+    the fraction of its pixels that are detected line pixels.
+      1. R = ridge_line_map(images)                       (Hessian dark-line strength)
+      2. line pixels = the top `line_frac` of R in each image (valid area only)
+      3. s_i = line-pixel density of patch i, z-scored per image, clipped to [-clip, clip]
+    The zero-padded border band (largest kernel radius) is excluded, as in line_saliency.
+    Returns (B, grid*grid) row-major, like line_saliency; with return_lines=True also
+    the binary line map (B,1,H,W)."""
+    if not 0.0 < line_frac < 1.0:
+        raise ValueError(f"line_frac must be in (0, 1), got {line_frac}")
+    R, border = ridge_line_map(images, sigmas)
+    B, _, H, W = R.shape
+    if border >= min(H, W) // grid:
+        raise ValueError(f"largest ridge kernel radius ({border}px) must be smaller than the patch "
+                         f"size ({min(H, W) // grid}px); use smaller --ridge_sigmas.")
+    valid = torch.zeros(1, 1, H, W, dtype=torch.bool, device=R.device)
+    valid[..., border:H - border, border:W - border] = True
+    vals = R[:, 0][valid[0, 0].expand(B, H, W)].view(B, -1)
+    thr = torch.quantile(vals, 1.0 - line_frac, dim=1).view(B, 1, 1, 1)
+    lines = (R >= thr) & valid
+    vm = valid.float()
+    dens = F.adaptive_avg_pool2d(lines.float(), grid) / F.adaptive_avg_pool2d(vm, grid).clamp_min(1e-8)
+    s = dens.flatten(1)                                                # (B, P), row-major
+    s = (s - s.mean(1, keepdim=True)) / (s.std(1, keepdim=True) + 1e-6)
+    if clip is not None:
+        s = s.clamp(-clip, clip)
+    return (s, lines) if return_lines else s
 
 
 def patchify_line_guided(saliency, batch_size, num_patches, num_blocks=2,
