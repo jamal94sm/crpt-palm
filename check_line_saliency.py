@@ -28,7 +28,7 @@ ap.add_argument("--gabor_orient", type=int, default=8)
 ap.add_argument("--gabor_num_scales", type=int, default=3)
 ap.add_argument("--gabor_gamma", type=float, default=0.5)
 ap.add_argument("--gabor_gray", type=int, default=0)       # SA-JEPA run uses --gabor_gray 0
-ap.add_argument("--pad", type=int, default=16)
+ap.add_argument("--pad", type=int, default=None, help="reflect padding; default = the bank's own kernel radius")
 a = ap.parse_args()
 
 files = sorted(sum([glob.glob(os.path.join(a.image_dir, e)) for e in ("*.jpg", "*.jpeg", "*.png", "*.bmp")], []))[:a.n]
