@@ -58,7 +58,7 @@ from gabor import GaborBank, patch_energy_descriptor, sanity_report
 from struct_loss import structure_loss, grad_conflict_cosine
 from sup_loss import supcon_loss, build_sup_head
 from cjepa_loss import cjepa_regularizer, CJEPAProjector
-from line_masking import line_saliency, patchify_line_guided, target_topq_fraction
+from line_masking import line_saliency, padded_responses, patchify_line_guided, target_topq_fraction
 #from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, context_consistency_loss
 from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, DMTPredictor
 from ci_utils import run_multi_seed
@@ -421,7 +421,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             if gabor_bank is not None:
                 with torch.no_grad():
                     gabor_resp = gabor_bank(images)
-                    saliency = line_saliency(gabor_resp, cfg.num_patches)
+                    saliency = line_saliency(padded_responses(gabor_bank, images), cfg.num_patches)
 
             if use_line_mask:
                 ctx_masks, tgt_masks = patchify_line_guided(
