@@ -16,7 +16,7 @@ from matplotlib.patches import Rectangle
 sys.path.insert(0, os.getcwd())
 from models import patchify
 from gabor import GaborBank, BASE_SCALE_LADDER
-from line_masking import line_saliency, patchify_line_guided, target_topq_fraction
+from line_masking import line_saliency, ridge_saliency, patchify_line_guided, target_topq_fraction
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--image", required=True)
@@ -30,6 +30,10 @@ ap.add_argument("--ctx_ratio", type=float, nargs=2, default=[0.90, 1.00])
 ap.add_argument("--eps", type=float, default=0.5)
 ap.add_argument("--tau", type=float, default=0.5)
 ap.add_argument("--select", type=int, default=0, help="1 = multiply by orientation selectivity")
+ap.add_argument("--clip", type=float, default=2.0, help="clip saliency z-scores to [-clip, clip]; <=0 = off")
+ap.add_argument("--saliency_mode", default="gabor", choices=["gabor", "ridge"])
+ap.add_argument("--ridge_sigmas", type=float, nargs="+", default=[1.0, 1.5, 2.0])
+ap.add_argument("--ridge_line_frac", type=float, default=0.10)
 ap.add_argument("--gabor_orient", type=int, default=8)
 ap.add_argument("--gabor_num_scales", type=int, default=3)
 ap.add_argument("--gabor_gamma", type=float, default=0.5)
@@ -45,8 +49,14 @@ x = (x - 0.5) / 0.5                                    # same Normalize as datas
 
 bank = GaborBank(n_orient=a.gabor_orient, scales=BASE_SCALE_LADDER[:a.gabor_num_scales],
                  gamma=a.gabor_gamma, per_channel=not bool(a.gabor_gray))
-with torch.no_grad():
-    saliency = line_saliency(bank(x), g, border=bank.pad, use_selectivity=bool(a.select))   # same as training
+clip = a.clip if a.clip > 0 else None
+lines = None
+with torch.no_grad():                                   # same as training
+    if a.saliency_mode == "ridge":
+        saliency, lines = ridge_saliency(x, g, sigmas=tuple(a.ridge_sigmas), line_frac=a.ridge_line_frac,
+                                         clip=clip, return_lines=True)
+    else:
+        saliency = line_saliency(bank(x), g, border=bank.pad, use_selectivity=bool(a.select), clip=clip)
 
 torch.manual_seed(a.seed)
 _, tgt_normal = patchify(1, g, a.num_blocks, trg_ratio=tuple(a.trg_ratio), ctx_ratio=tuple(a.ctx_ratio))
@@ -67,10 +77,14 @@ def draw(ax, tgt_masks, title):
 
 fig, axes = plt.subplots(1, 3, figsize=(15, 5.4))
 draw(axes[0], tgt_normal, "Normal masking (I-JEPA, uniform)")
-draw(axes[1], tgt_line, f"Line-guided masking (eps={a.eps}, tau={a.tau})")
+draw(axes[1], tgt_line, f"Line-guided masking ({a.saliency_mode}, eps={a.eps}, tau={a.tau})")
 axes[2].imshow(img, extent=(0, a.img_size, a.img_size, 0))
 axes[2].imshow(saliency[0].view(g, g).numpy(), cmap="magma", alpha=0.6, extent=(0, a.img_size, a.img_size, 0))
-axes[2].set_title("Line saliency (bright = sampled more often)", fontsize=10); axes[2].axis("off")
+if lines is not None:                                   # ridge mode: also show the detected crease pixels
+    ov = np.zeros((a.img_size, a.img_size, 4)); ov[lines[0, 0].numpy()] = [0, 1, 1, 1]
+    axes[2].imshow(ov, extent=(0, a.img_size, a.img_size, 0))
+axes[2].set_title(f"Line saliency ({a.saliency_mode}; bright = sampled more often)"
+                  + ("\ncyan = detected line pixels" if lines is not None else ""), fontsize=10); axes[2].axis("off")
 plt.tight_layout()
 plt.savefig(a.out, dpi=150, bbox_inches="tight", pad_inches=0.15)
 print("saved", a.out)
