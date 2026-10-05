@@ -3,6 +3,7 @@ config.py — JEPA on CASIA-MS: 3 evaluation modes.
 """
 import argparse
 import json
+import math
 
 from gabor import BASE_SCALE_LADDER
 
@@ -65,7 +66,14 @@ BASELINE_SPECS = [
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
                "--w_a2", "0.3",
-               "--mask_mode", "line_guided",
+               "--mask_mode", "line_guided", "--saliency_mode", "gabor",
+               "--line_mask_eps", "0.5", "--line_mask_tau", "0.5"]},
+    {"key": "palmjepa_lgr", "name": "SA-JEPA-LG-ridge", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3",
+               "--mask_mode", "line_guided", "--saliency_mode", "ridge",
                "--line_mask_eps", "0.5", "--line_mask_tau", "0.5"]},
 ]
 
@@ -350,8 +358,14 @@ def get_cfg(args=None):
         help="'random' = original I-JEPA multi-block target placement. "
              "'line_guided' = target-block centres drawn from "
              "p(i) = (1-eps)*softmax(s_i/tau) + eps/P, where s is a per-patch "
-             "Gabor line-saliency score (see line_masking.py). Block size/"
-             "shape/count and the context block are unchanged.")
+             "line-saliency score chosen by --saliency_mode (see "
+             "line_masking.py). Block size/shape/count and the context "
+             "block are unchanged.")
+    p.add_argument("--saliency_mode", default="gabor", choices=["gabor", "ridge"],
+        help="Line saliency used by line-guided masking (and by the "
+             "targets-in-top-25%% diagnostic). 'gabor' = Gabor line energy "
+             "per patch; 'ridge' = Hessian crease detection -> fraction of "
+             "each patch's pixels that are detected line pixels.")
     p.add_argument("--line_mask_eps", type=float, default=0.5,
         help="Uniform-mixing weight in [0,1]. 1.0 = uniform placement "
              "(same as random); 0.0 = pure saliency sampling. Keeps every "
@@ -360,8 +374,19 @@ def get_cfg(args=None):
         help="Softmax temperature (>0) on the z-scored saliency. Smaller = "
              "targets concentrate harder on line patches.")
     p.add_argument("--line_mask_select", type=int, default=0,
-        help="1 = multiply line energy by orientation selectivity (max/mean). "
-             "Off by default: it is biased upward on border patches.")
+        help="Gabor mode only: 1 = multiply line energy by orientation "
+             "selectivity (max/mean). Off by default: it is biased upward "
+             "on border patches.")
+    p.add_argument("--line_mask_clip", type=float, default=2.0,
+        help="Clip saliency z-scores to [-c, c] before the softmax; <=0 disables. "
+             "Stops one extreme patch (fingers, a deep fold) taking all guided draws.")
+    p.add_argument("--ridge_sigmas", type=float, nargs="+", default=[1.0, 1.5, 2.0],
+        help="Ridge mode only: Gaussian scales (px) of the Hessian line "
+             "detector. The largest kernel radius ceil(3*sigma) must stay "
+             "below the patch size (img_size/num_patches).")
+    p.add_argument("--ridge_line_frac", type=float, default=0.10,
+        help="Ridge mode only: fraction of each image's (valid) pixels "
+             "marked as line pixels -- the strongest ridge responses.")
      
     # ─── Multi-seed CI aggregation ─────────────────────────────
     p.add_argument("--use_CI", type=int, default=0, choices=[0, 1],
@@ -422,7 +447,8 @@ def get_cfg(args=None):
              "table. Defaults to 'ALL_BASELINES.txt'.")
     p.add_argument("--baselines", nargs="*", default=None,
         help="Subset of baselines to run, by key. Default: None = run ALL. "
-             "Keys: vit_sup, compnet, jepa, vicreg, simsiam, cjepa, palmjepa.")
+             "Keys: vit_sup, compnet, jepa, vicreg, simsiam, cjepa, palmjepa, "
+             "palmjepa_lg, palmjepa_lgr, ...")
     p.add_argument("--force_rerun_baselines", type=int, default=0, choices=[0, 1],
         help="1 = re-run every baseline even if its output file already "
              "has a complete SUMMARY_CSV block from a prior run. "
@@ -456,10 +482,21 @@ def get_cfg(args=None):
 
     cfg = p.parse_args(args)
 
+    # ─── Line-guided masking checks ───────────────────────────
     if not (0.0 <= cfg.line_mask_eps <= 1.0):
         raise SystemExit(f"--line_mask_eps must be in [0, 1], got {cfg.line_mask_eps}")
     if cfg.line_mask_tau <= 0:
         raise SystemExit(f"--line_mask_tau must be > 0, got {cfg.line_mask_tau}")
+    if not (0.0 < cfg.ridge_line_frac < 1.0):
+        raise SystemExit(f"--ridge_line_frac must be in (0, 1), got {cfg.ridge_line_frac}")
+    if any(s <= 0 for s in cfg.ridge_sigmas):
+        raise SystemExit(f"--ridge_sigmas must all be > 0, got {cfg.ridge_sigmas}")
+    if cfg.saliency_mode == "ridge":
+        patch_px = cfg.img_size // cfg.num_patches
+        radius = int(math.ceil(3 * max(cfg.ridge_sigmas)))
+        if radius >= patch_px:
+            raise SystemExit(f"--ridge_sigmas: largest kernel radius ({radius}px) must be "
+                             f"smaller than the patch size ({patch_px}px).")
 
     # ─── Resolve legacy --use_gabor into --struct_mode ────────
     # --use_gabor 1 (with struct_mode left at "none") == --struct_mode a1,
