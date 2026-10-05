@@ -18,6 +18,27 @@ import torch
 import torch.nn.functional as F
 
 
+def padded_responses(gabor_bank, images, pad=16):
+    """Gabor responses WITHOUT the border artifact of the bank's own padding.
+
+    Gabor kernels are zero-mean, so a flat region gives no response -- but the
+    step between the image and the zero padding a 'same'-conv bank applies at
+    the image border does. Border patches then look like strong lines. Here the
+    images are reflect-padded first, the bank is run on the larger image and the
+    result is cropped back, so the filters only ever see image-like content.
+
+    pad must be >= the largest kernel radius (16 covers kernels up to 33px).
+    Requires a size-preserving bank: (B,3,H,W) -> (B,K,H,W)."""
+    H, W = images.shape[-2:]
+    x = torch.nn.functional.pad(images, (pad, pad, pad, pad), mode="reflect")
+    r = gabor_bank(x)
+    if r.dim() != 4 or tuple(r.shape[-2:]) != (H + 2 * pad, W + 2 * pad):
+        raise ValueError(
+            f"padded_responses needs a size-preserving bank; got {tuple(r.shape)} "
+            f"for a {tuple(x.shape)} input.")
+    return r[..., pad:pad + H, pad:pad + W]
+
+
 def line_saliency(gabor_resp, grid):
     """gabor_resp: raw Gabor responses, expected 4-D (B, K, H, W).
     Returns per-patch saliency (B, grid*grid), z-scored within each image,
