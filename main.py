@@ -421,7 +421,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             if gabor_bank is not None:
                 with torch.no_grad():
                     gabor_resp = gabor_bank(images)
-                    saliency = line_saliency(padded_responses(gabor_bank, images), cfg.num_patches)
+                    saliency = line_saliency(gabor_resp, cfg.num_patches, border=gabor_bank.pad,
+                                             use_selectivity=bool(cfg.line_mask_select))
 
             if use_line_mask:
                 ctx_masks, tgt_masks = patchify_line_guided(
