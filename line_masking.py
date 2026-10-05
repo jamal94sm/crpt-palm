@@ -10,6 +10,14 @@ descriptor-normalised) Gabor responses of the clean image. Block size, shape
 (aspect ratio) and count are exactly I-JEPA's; the context-block sampling is
 copied unchanged from models.patchify. eps = 1 recovers uniform placement.
 
+Border handling: GaborBank zero-pads, so responses within `bank.pad` pixels of
+the image edge are contaminated (the image/zero step looks like a line).
+Reflect-padding (padded_responses) fixes that but creates a mirror "fold" that
+also looks like a line when the image has a brightness gradient at the edge
+(vignetting, common on smartphones). line_saliency(..., border=bank.pad)
+instead ignores that band when pooling: each patch is scored only on pixels
+whose filter response never touched the padding.
+
 models.patchify is NOT modified, so JEPA / C-JEPA / DMT-JEPA are unaffected.
 Return signature is identical to models.patchify: ([ctx (B,Nc)], [tgt_k (B,Nt)]).
 """
@@ -19,25 +27,14 @@ import torch.nn.functional as F
 
 
 def padded_responses(gabor_bank, images, pad=None):
-    """Gabor responses WITHOUT the border artifact of the bank's own padding.
-
-    Gabor kernels are zero-mean, so a flat region gives no response -- but the
-    step between the image and the zero padding a 'same'-conv bank applies at
-    the image border does. Border patches then look like strong lines. Here the
-    images are reflect-padded first, the bank is run on the larger image and the
-    result is cropped back, so the filters only ever see image-like content.
-
-    pad: reflect-padding in pixels. None (default) uses gabor_bank.pad -- the
-    bank's own kernel radius, which is exactly the minimum that keeps the bank's
-    zero padding out of the cropped result (falls back to 16 if the bank has no
-    .pad). Any larger value gives the same output at higher cost.
-    Requires a size-preserving bank: (B,3,H,W) -> (B,K,H,W)."""
+    """Reflect-pad -> bank -> crop. Kept for comparison in check_line_saliency.py.
+    Prefer line_saliency(gabor_bank(images), grid, border=gabor_bank.pad)."""
     if pad is None:
         pad = int(getattr(gabor_bank, "pad", 16))
     H, W = images.shape[-2:]
     if pad >= min(H, W):
         raise ValueError(f"reflect padding ({pad}) must be smaller than the image size ({H}x{W}).")
-    x = torch.nn.functional.pad(images, (pad, pad, pad, pad), mode="reflect")
+    x = F.pad(images, (pad, pad, pad, pad), mode="reflect")
     r = gabor_bank(x)
     if r.dim() != 4 or tuple(r.shape[-2:]) != (H + 2 * pad, W + 2 * pad):
         raise ValueError(
@@ -46,24 +43,37 @@ def padded_responses(gabor_bank, images, pad=None):
     return r[..., pad:pad + H, pad:pad + W]
 
 
-def line_saliency(gabor_resp, grid):
-    """gabor_resp: raw Gabor responses, expected 4-D (B, K, H, W).
+def line_saliency(gabor_resp, grid, border=0, use_selectivity=False):
+    """gabor_resp: raw Gabor responses (B, K, H, W) straight from gabor_bank(images).
     Returns per-patch saliency (B, grid*grid), z-scored within each image,
     in the SAME row-major patch order as the encoder (index = row*grid + col).
 
-    s = (oriented-line energy) * (orientation selectivity)
-        energy      = sum_k |response_k|, average-pooled to the patch grid
-        selectivity = max_k / mean_k  (high for a line, ~1 for isotropic texture)
-    Neither term depends on how the K channels are ordered."""
+    border: pixels at the image edge to ignore when pooling. Use gabor_bank.pad
+            (the kernel radius) to drop exactly the zero-padding-contaminated band.
+            0 = pool over all pixels (old behaviour).
+    use_selectivity: False (default) -> s = sum_k e_k (line energy).
+            True -> s = energy * (max_k e_k / mean_k e_k). The selectivity factor
+            is biased upward on border patches (fewer valid pixels -> noisier max),
+            so it is off by default."""
     if gabor_resp.dim() != 4:
         raise ValueError(
             f"line_saliency expects raw Gabor responses of shape (B, K, H, W), "
             f"got {tuple(gabor_resp.shape)}. Check what gabor_bank(images) returns.")
-    e = F.adaptive_avg_pool2d(gabor_resp.abs().float(), grid)      # (B, K, g, g)
+    a = gabor_resp.abs().float()
+    H, W = a.shape[-2:]
+    if border > 0:
+        if border >= min(H, W) // grid:
+            raise ValueError(f"border ({border}px) must be smaller than the patch size "
+                             f"({min(H, W) // grid}px), or corner patches have no valid pixels.")
+        m = torch.zeros(1, 1, H, W, device=a.device, dtype=a.dtype)
+        m[..., border:H - border, border:W - border] = 1.0
+        e = F.adaptive_avg_pool2d(a * m, grid) / F.adaptive_avg_pool2d(m, grid).clamp_min(1e-8)
+    else:
+        e = F.adaptive_avg_pool2d(a, grid)                         # (B, K, g, g)
     e = e.flatten(2).transpose(1, 2)                               # (B, P, K), row-major patches
-    energy = e.sum(-1)
-    selectivity = e.max(-1).values / (e.mean(-1) + 1e-6)
-    s = energy * selectivity
+    s = e.sum(-1)
+    if use_selectivity:
+        s = s * (e.max(-1).values / (e.mean(-1) + 1e-6))
     return (s - s.mean(1, keepdim=True)) / (s.std(1, keepdim=True) + 1e-6)
 
 
@@ -81,7 +91,6 @@ def patchify_line_guided(saliency, batch_size, num_patches, num_blocks=2,
     if tuple(saliency.shape) != (batch_size, P):
         raise ValueError(f"saliency must be ({batch_size}, {P}), got {tuple(saliency.shape)}")
 
-    # one softmax for the whole batch; sampling on CPU avoids a GPU sync per draw
     probs_all = ((1.0 - eps) * torch.softmax(saliency.detach().float() / tau, dim=1)
                  + eps / P).cpu()
 
@@ -104,8 +113,8 @@ def patchify_line_guided(saliency, batch_size, num_patches, num_blocks=2,
         h, w = block_hw(scale)
         c = int(torch.multinomial(probs, 1))
         cy, cx = divmod(c, W)
-        y = min(max(cy - h // 2, 0), H - h)                # centre block on the sampled patch,
-        x = min(max(cx - w // 2, 0), W - w)                # clamped to stay inside the grid
+        y = min(max(cy - h // 2, 0), H - h)
+        x = min(max(cx - w // 2, 0), W - w)
         idx = [(y + i) * W + (x + j) for i in range(h) for j in range(w)]
         return torch.tensor(idx, device=device)
 
@@ -136,7 +145,7 @@ def patchify_line_guided(saliency, batch_size, num_patches, num_blocks=2,
 @torch.no_grad()
 def target_topq_fraction(saliency, tgt_masks, q=0.25):
     """Diagnostic: fraction of target patches lying in each image's top-q
-    saliency patches. Uniform placement gives ~q (0.25 by default)."""
+    saliency patches. Compare against a mask_mode=random run."""
     B, P = saliency.shape
     k = max(1, int(round(q * P)))
     top = torch.zeros(B, P, dtype=torch.bool, device=saliency.device)
