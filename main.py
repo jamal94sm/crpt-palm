@@ -58,7 +58,7 @@ from gabor import GaborBank, patch_energy_descriptor, sanity_report
 from struct_loss import structure_loss, grad_conflict_cosine
 from sup_loss import supcon_loss, build_sup_head
 from cjepa_loss import cjepa_regularizer, CJEPAProjector
-from line_masking import line_saliency, padded_responses, patchify_line_guided, target_topq_fraction
+from line_masking import line_saliency, patchify_line_guided, target_topq_fraction
 #from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, context_consistency_loss
 from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, DMTPredictor
 from ci_utils import run_multi_seed
