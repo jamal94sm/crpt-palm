@@ -31,6 +31,9 @@ baseline exactly):
                         predictor's input) was not ported, since this
                         project's Predictor has a fixed per-patch input
                         interface incompatible with that substitution.
+  --mask_mode line_guided : target-block centres sampled from a per-patch
+                        line-saliency map (--saliency_mode gabor | ridge);
+                        see line_masking.py.
 
 """
 
@@ -58,7 +61,7 @@ from gabor import GaborBank, patch_energy_descriptor, sanity_report
 from struct_loss import structure_loss, grad_conflict_cosine
 from sup_loss import supcon_loss, build_sup_head
 from cjepa_loss import cjepa_regularizer, CJEPAProjector
-from line_masking import line_saliency, patchify_line_guided, target_topq_fraction
+from line_masking import line_saliency, ridge_saliency, patchify_line_guided, target_topq_fraction
 #from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, context_consistency_loss
 from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, DMTPredictor
 from ci_utils import run_multi_seed
@@ -184,6 +187,54 @@ def make_scheduler(opt, cfg, total_steps):
 
 
 # ══════════════════════════════════════════════════════════════
+#  Line-saliency sanity check (printed once: epoch 1, batch 0)
+# ══════════════════════════════════════════════════════════════
+
+@torch.no_grad()
+def _saliency_sanity(saliency, cfg, use_line_mask, lines=None):
+    """One-time printout so a broken saliency map is caught in the first
+    minute of a run instead of after 200 epochs."""
+    g = cfg.num_patches
+    s = saliency.detach().float().cpu()
+    B, P = s.shape
+    m = s.view(B, g, g)
+    ring = torch.zeros(g, g, dtype=torch.bool)
+    ring[0, :] = ring[-1, :] = True
+    ring[:, 0] = ring[:, -1] = True
+    rmi = (m[:, ring].mean(1) - m[:, ~ring].mean(1)).mean().item()
+
+    print("\n  ── Line-saliency sanity check (epoch 1, batch 0) ──")
+    print(f"      saliency_mode: {cfg.saliency_mode}   shape: {tuple(s.shape)}   "
+          f"range: [{s.min().item():+.2f}, {s.max().item():+.2f}]")
+    print(f"      ring - interior: {rmi:+.2f}   (want <= ~0.3; large positive = border artifact)")
+    if lines is not None:
+        H, W = lines.shape[-2:]
+        b = int(math.ceil(3 * max(cfg.ridge_sigmas)))
+        valid_share = max(H - 2 * b, 0) * max(W - 2 * b, 0) / float(H * W)
+        frac = lines.float().mean().item()
+        print(f"      ridge line pixels: {frac*100:.1f}% of image   "
+              f"(expected ~{cfg.ridge_line_frac*valid_share*100:.1f}% = line_frac x valid area)")
+    if use_line_mask:
+        p = torch.softmax(s / cfg.line_mask_tau, dim=1)          # guided part only (eps = 0)
+        k = max(1, P // 4)
+        top_mass = torch.gather(p, 1, s.topk(k, dim=1).indices).sum(1).mean().item()
+        maxp = p.max(1).values
+        print(f"      guided part (eps=0): largest single-patch share "
+              f"mean={maxp.mean().item():.2f} worst={maxp.max().item():.2f}   "
+              f"mass on top-25% patches={top_mass:.2f}")
+        print(f"      full mixture (eps={cfg.line_mask_eps}): expected targets-in-top-25% "
+              f"~{(1 - cfg.line_mask_eps) * top_mass + cfg.line_mask_eps * 0.25:.2f} "
+              f"(ignores block extent/clamping)")
+        if maxp.max().item() > 0.5:
+            print("      !! WARNING: guided sampling collapses onto one patch in some images -- "
+                  "raise --line_mask_tau or lower --line_mask_clip.")
+    if rmi > 0.3:
+        print("      !! WARNING: border patches score higher than the interior -- "
+              "check the saliency map with check_line_saliency.py.")
+    print()
+
+
+# ══════════════════════════════════════════════════════════════
 #  JEPA (self-supervised, with optional structural + supervised terms)
 # ══════════════════════════════════════════════════════════════
 
@@ -274,16 +325,36 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             n_sh += sum(p.numel() for p in struct_head_a2.parameters())
 
     # ─── Line-guided target masking (option) ───
+    # Gabor saliency needs a Gabor bank; ridge saliency works on the image
+    # directly. Saliency is also computed (for the targets-in-top-25%
+    # diagnostic only) when masking is random but a Gabor bank exists
+    # (struct branch), or when --saliency_mode ridge is set.
     use_line_mask = (getattr(cfg, "mask_mode", "random") == "line_guided")
-    if use_line_mask and gabor_bank is None:
+    sal_mode = getattr(cfg, "saliency_mode", "gabor")
+    sal_clip = cfg.line_mask_clip if cfg.line_mask_clip > 0 else None
+    if use_line_mask and sal_mode == "gabor" and gabor_bank is None:
         gabor_bank = GaborBank(
             n_orient=cfg.gabor_orient,
             scales=cfg.gabor_scales,
             gamma=cfg.gabor_gamma,
             per_channel=not bool(getattr(cfg, "gabor_gray", 1)),
         ).to(cfg.device)
+    use_saliency = (sal_mode == "ridge") or (gabor_bank is not None)
     print(f"  Masking: {cfg.mask_mode}"
-          + (f"  (eps={cfg.line_mask_eps}, tau={cfg.line_mask_tau})" if use_line_mask else ""))
+          + ("" if use_line_mask else "  (I-JEPA multi-block, uniform placement)"))
+    if use_saliency:
+        if sal_mode == "ridge":
+            r_px = int(math.ceil(3 * max(cfg.ridge_sigmas)))
+            sal_desc = (f"ridge (Hessian crease detection)  sigmas={list(cfg.ridge_sigmas)}  "
+                        f"line_frac={cfg.ridge_line_frac}  border={r_px}px")
+        else:
+            sal_desc = (f"gabor (line energy)  K={gabor_bank.K}  border={gabor_bank.pad}px  "
+                        f"selectivity={'ON' if cfg.line_mask_select else 'OFF'}")
+        print(f"  Line saliency: {sal_desc}  clip={sal_clip}"
+              + ("" if use_line_mask else "   [diagnostic only]"))
+    if use_line_mask:
+        print(f"  Line-guided sampling: p(i) = (1-eps)*softmax(s/tau) + eps/P   "
+              f"eps={cfg.line_mask_eps}  tau={cfg.line_mask_tau}")
 
     # ─── Supervised identity term (uses source-domain labels) ─────
     use_sup = bool(getattr(cfg, "use_supervision", 0)) and cfg.w_sup > 0
@@ -339,7 +410,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
           f"  Structural: {'ON' if use_struct else 'OFF'}"
           f"  Supervision: {'ON' if use_sup else 'OFF'}"
           f"  C-JEPA: {'ON' if use_cjepa else 'OFF'}"
-          f"  DMT-JEPA: {'ON' if use_dmtjepa else 'OFF'}")
+          f"  DMT-JEPA: {'ON' if use_dmtjepa else 'OFF'}"
+          f"  Line-guided masking: {('ON (' + sal_mode + ')') if use_line_mask else 'OFF'}")
 
     # NOTE: context_agg_head is now a SUBMODULE of predictor (DMTPredictor
     # holds it directly) when use_dmtjepa -- list(predictor.parameters())
@@ -414,15 +486,29 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             labels = labels.to(cfg.device)
             B = images.size(0)
 
-            # Raw Gabor responses of the CLEAN image, computed once and reused by
-            # the A2 descriptor below. Only exists when a Gabor bank is built
-            # (struct branch and/or line-guided masking).
-            gabor_resp = saliency = None
-            if gabor_bank is not None:
-                with torch.no_grad():
+            # Raw Gabor responses of the CLEAN image (reused by the A2
+            # descriptor below) and the per-patch line saliency (used by
+            # line-guided masking and the targets-in-top-25% diagnostic).
+            gabor_resp = saliency = sal_lines = None
+            first_batch = (epoch == 1 and n_bat == 0)
+            with torch.no_grad():
+                if gabor_bank is not None:
                     gabor_resp = gabor_bank(images)
-                    saliency = line_saliency(gabor_resp, cfg.num_patches, border=gabor_bank.pad,
-                                             use_selectivity=bool(cfg.line_mask_select))
+                if sal_mode == "ridge":
+                    if first_batch:
+                        saliency, sal_lines = ridge_saliency(
+                            images, cfg.num_patches, sigmas=tuple(cfg.ridge_sigmas),
+                            line_frac=cfg.ridge_line_frac, clip=sal_clip, return_lines=True)
+                    else:
+                        saliency = ridge_saliency(
+                            images, cfg.num_patches, sigmas=tuple(cfg.ridge_sigmas),
+                            line_frac=cfg.ridge_line_frac, clip=sal_clip)
+                elif gabor_resp is not None:
+                    saliency = line_saliency(
+                        gabor_resp, cfg.num_patches, border=gabor_bank.pad,
+                        use_selectivity=bool(cfg.line_mask_select), clip=sal_clip)
+            if first_batch and saliency is not None:
+                _saliency_sanity(saliency, cfg, use_line_mask, sal_lines)
 
             if use_line_mask:
                 ctx_masks, tgt_masks = patchify_line_guided(
@@ -681,8 +767,9 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                       f"std={ep_cjepa_std:.4f} cov={ep_cjepa_cov:.4f}")
 
             if n_topq > 0:
-                print(f"           masking={cfg.mask_mode}: targets in top-25% line "
-                      f"saliency = {ep_topq:.3f}  (compare to a mask_mode=random run)")
+                print(f"           masking={cfg.mask_mode} saliency={sal_mode}: "
+                      f"targets in top-25% line saliency = {ep_topq:.3f}  "
+                      f"(compare to a mask_mode=random run with the same --saliency_mode)")
               
             if (use_struct or use_sup) and cfg.log_conflict:
                 msg = f"           conflict_cos={ep_conflict:+.4f}"
@@ -720,6 +807,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                 eval_entry["conflict_cos"] = ep_conflict
                 if task_weighter is not None:
                     eval_entry["learned_w"] = task_weighter.weights()
+            if n_topq > 0:
+                eval_entry["topq"] = ep_topq
 
             mean_r1 = np.mean([r["rank1"] for r in eval_results.values()])
             mean_eer = np.mean([r["eer"] for r in eval_results.values()])
@@ -755,7 +844,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
     table_text = capture_print(
         _print_history_jepa, eval_history, eval_dict,
-        use_a1, use_a2, use_sup, use_cjepa)
+        use_a1, use_a2, use_sup, use_cjepa, use_saliency)
 
     def _print_cross_dataset():
         if not cross_dataset_results:
@@ -784,7 +873,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
 
 def _print_history_jepa(eval_history, eval_dict, use_a1=False, use_a2=False,
-                         use_sup=False, use_cjepa=False):
+                         use_sup=False, use_cjepa=False, use_topq=False):
     eval_names = list(eval_dict.keys())
 
     print(f"\n  {'Epoch':>6} {'Loss':>8} {'Sim':>6}", end="")
@@ -796,6 +885,8 @@ def _print_history_jepa(eval_history, eval_dict, use_a1=False, use_a2=False,
         print(f" {'l_sup':>7} {'supaux':>7}", end="")
     if use_cjepa:
         print(f" {'l_cjp':>7} {'cjsim':>6} {'cjstd':>6} {'cjcov':>6}", end="")
+    if use_topq:
+        print(f" {'topq':>6}", end="")
     for name in eval_names:
         print(f" │ {name[:12]:>12} R1   EER", end="")
     print()
@@ -809,6 +900,8 @@ def _print_history_jepa(eval_history, eval_dict, use_a1=False, use_a2=False,
         print(f"{'─'*7}{'─'*7}", end="")
     if use_cjepa:
         print(f"{'─'*7}{'─'*6}{'─'*6}{'─'*6}", end="")
+    if use_topq:
+        print(f"{'─'*7}", end="")
     for _ in eval_names:
         print(f"─┼─{'─'*24}", end="")
     print()
@@ -832,6 +925,8 @@ def _print_history_jepa(eval_history, eval_dict, use_a1=False, use_a2=False,
                   f"{entry.get('cjepa_sim', float('nan')):>6.3f} "
                   f"{entry.get('cjepa_std', float('nan')):>6.3f} "
                   f"{entry.get('cjepa_cov', float('nan')):>6.3f}", end="")
+        if use_topq:
+            print(f" {entry.get('topq', float('nan')):>6.3f}", end="")
         for name in eval_names:
             if name in entry:
                 r = entry[name]
@@ -1143,6 +1238,9 @@ def main():
     print(f"  SOURCE PRETRAINING  —  method: {cfg.method.upper()}")
     print(f"  Mode: {cfg.mode}   embed_dim={cfg.embed_dim}   "
           f"epochs={cfg.epochs}   aug={cfg.aug_multiplier}×")
+    if cfg.method == "jepa" and cfg.mask_mode == "line_guided":
+        print(f"  Masking: line_guided   saliency={cfg.saliency_mode}   "
+              f"eps={cfg.line_mask_eps}   tau={cfg.line_mask_tau}   clip={cfg.line_mask_clip}")
     print(f"{'='*80}\n")
 
     if bool(getattr(cfg, "run_all_baselines", 0)):
