@@ -18,7 +18,7 @@ import torch
 import torch.nn.functional as F
 
 
-def padded_responses(gabor_bank, images, pad=16):
+def padded_responses(gabor_bank, images, pad=None):
     """Gabor responses WITHOUT the border artifact of the bank's own padding.
 
     Gabor kernels are zero-mean, so a flat region gives no response -- but the
@@ -27,9 +27,16 @@ def padded_responses(gabor_bank, images, pad=16):
     images are reflect-padded first, the bank is run on the larger image and the
     result is cropped back, so the filters only ever see image-like content.
 
-    pad must be >= the largest kernel radius (16 covers kernels up to 33px).
+    pad: reflect-padding in pixels. None (default) uses gabor_bank.pad -- the
+    bank's own kernel radius, which is exactly the minimum that keeps the bank's
+    zero padding out of the cropped result (falls back to 16 if the bank has no
+    .pad). Any larger value gives the same output at higher cost.
     Requires a size-preserving bank: (B,3,H,W) -> (B,K,H,W)."""
+    if pad is None:
+        pad = int(getattr(gabor_bank, "pad", 16))
     H, W = images.shape[-2:]
+    if pad >= min(H, W):
+        raise ValueError(f"reflect padding ({pad}) must be smaller than the image size ({H}x{W}).")
     x = torch.nn.functional.pad(images, (pad, pad, pad, pad), mode="reflect")
     r = gabor_bank(x)
     if r.dim() != 4 or tuple(r.shape[-2:]) != (H + 2 * pad, W + 2 * pad):
