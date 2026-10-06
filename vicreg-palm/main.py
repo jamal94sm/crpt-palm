@@ -28,6 +28,8 @@ from paired_dataset import PairedCASIADataset
 from models import Encoder, Expander, FeatureExtractor
 from vicreg_loss import vicreg_loss
 from evaluate import run_full_eval
+from ckpt_utils import maybe_save_ckpt
+
 
 def exclude_bias_and_norm(p):
     """Official filter (facebookresearch/vicreg main_vicreg.py, fetched and
@@ -304,6 +306,7 @@ def train_vicreg(cfg, train_loader, eval_dict, out_path):
             print()
 
     encoder.eval()
+    maybe_save_ckpt(cfg, encoder, "vicreg")
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
         print(f"\n ── Cross-dataset evaluation (final epoch only) ──")
