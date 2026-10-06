@@ -34,7 +34,7 @@ from models import CapiEncoderDecoder, FeatureExtractor
 from rope_sk import OnlineClustering, L2NormLinear
 from masking import collate_capi_masks
 from evaluate import run_full_eval
-
+from ckpt_utils import maybe_save_ckpt
 
 def set_seed(seed):
     random.seed(seed)
@@ -295,6 +295,7 @@ def train_capi(cfg, train_loader, eval_dict, out_path):
             print(f" Summary: Mean R1={mean_r1:.2f}% | Mean EER={mean_eer:.2f}%\n")
 
     teacher_backbone.eval()
+    maybe_save_ckpt(cfg, teacher_backbone, "capi")
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
         print(f"\n ── Cross-dataset evaluation (final epoch only) ──")
