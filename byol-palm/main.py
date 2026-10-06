@@ -25,7 +25,7 @@ from paired_dataset import PairedCASIADataset
 from models import Encoder, Expander, Predictor, FeatureExtractor, update_ema
 from byol_loss import byol_loss
 from evaluate import run_full_eval
-
+from ckpt_utils import maybe_save_ckpt
 
 def exclude_bias_and_norm(p):
     """Official filter (facebookresearch/vicreg, structurally identical to
@@ -324,6 +324,7 @@ def train_byol(cfg, train_loader, eval_dict, out_path):
             print(f" Summary: Mean R1={mean_r1:.2f}% | Mean EER={mean_eer:.2f}%\n")
 
     online_encoder.eval()
+    maybe_save_ckpt(cfg, online_encoder, "byol")
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
         print(f"\n ── Cross-dataset evaluation (final epoch only) ──")
