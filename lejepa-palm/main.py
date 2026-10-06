@@ -25,7 +25,7 @@ from models import LeJepaEncoder, FeatureExtractor
 from sigreg_loss import SIGReg, lejepa_prediction_loss
 from multicrop_dataset import MultiCropDataset, multicrop_collate
 from evaluate import run_full_eval
-
+from ckpt_utils import maybe_save_ckpt
 
 # ══════════════════ ecosystem plumbing (same as every other baseline) ══════════════════
 def set_seed(seed):
@@ -229,6 +229,7 @@ def train_lejepa(cfg, train_loader, eval_dict, out_path):
             print(f" Summary: Mean R1={mean_r1:.2f}% | Mean EER={mean_eer:.2f}%\n")
 
     encoder.eval()
+    maybe_save_ckpt(cfg, encoder, "lejepa")
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
         print(f"\n ── Cross-dataset evaluation (final epoch only) ──")
