@@ -11,7 +11,15 @@ contributes to that embedding, via attention rollout (Abnar & Zuidema, 2020):
     map         c_j = (1/N) * sum_i R[i,j]                               (mean pooling = average over i)
 c sums to 1 over the N patches. Reshaped row-major to (grid, grid).
 
-SECOND ROW: PCA map of the final patch features (what the features encode, not where information flows from)
+SECOND MAP (extra attention row): LAST LAYER, HEAD-AVERAGED, MEAN OVER QUERIES  ("attention received")
+    A_bar[i,j] = mean over the heads of the last encoder layer's attention (query i, key j)      (N x N)
+    m_j        = (1/N) * sum_i A_bar[i,j]                                                       (mean over the queries)
+    m sums to 1 over the N patches. This is the closest analogue of "the averaged maps from different heads in the
+    last attention layer" of the DMT-JEPA paper (Figure 2) for an encoder WITHOUT a CLS token; the paper does not say
+    how the N x N matrix is reduced to one map, so the mean over queries is an inference, not a documented step.
+    It looks at ONE layer only, with no residual identity and no chaining through earlier layers (unlike the rollout).
+
+LAST ROW: PCA map of the final patch features (what the features encode, not where information flows from)
     Z = final patch tokens of ALL images stacked (B*N x D); centre; top-3 principal components via SVD;
     scores P = (Z - mean) @ V[:3]^T; each score is clipped to its 2-98 percentile and mapped to R, G, B.
     The PCA is fitted JOINTLY on all images, so one colour means the same kind of feature in every image.
@@ -135,6 +143,12 @@ def rollout(attns):
     return R
 
 
+def last_layer_map(attns):
+    """Last encoder layer only: average the heads, then average over the QUERY tokens (attention received).
+    attns: list of (B, heads, N_query, N_key) -> (B, N_key); sums to 1 because every attention row does."""
+    return attns[-1].mean(1).mean(1)
+
+
 def upsample_maps(maps, S):
     """maps: (B, g, g) -> (B, S, S): bilinear upsampling, then per-map min-max normalisation to [0, 1]."""
     up = F.interpolate(maps.unsqueeze(1), size=(S, S), mode="bilinear", align_corners=False).squeeze(1)
@@ -147,13 +161,11 @@ def normalized_entropy(contrib):
     return -(contrib * (contrib + 1e-12).log()).sum(-1) / math.log(contrib.shape[-1])
 
 
-def pca_scores(tokens, k=3, center_per_image=True):
+def pca_scores(tokens, k=3):
     """tokens: (B, N, D). Joint PCA over all B*N tokens (SVD of the centred matrix).
     Returns scores (B, N, k), explained-variance ratios (k,), and positional shares (k,).
     Component signs are fixed deterministically (largest-|loading| entry positive)."""
     B, N, D = tokens.shape
-    if center_per_image:                      # drop the global (colour / illumination) component
-        tokens = tokens - tokens.mean(1, keepdim=True)
     X = tokens.reshape(B * N, D).double()
     Xc = X - X.mean(0, keepdim=True)
     _, S, Vh = torch.linalg.svd(Xc, full_matrices=False)
@@ -248,16 +260,27 @@ def main():
     assert torch.allclose(contrib.sum(-1), torch.ones(B, device=contrib.device), atol=1e-4)
     print(f"  checks passed: manual forward == ContextEncoder.forward (max |diff| = {diff:.1e}); attention/rollout rows sum to 1")
 
+    last = last_layer_map(attns)                                                       # (B, N): last layer, heads and queries averaged
+    assert (last >= 0).all() and torch.allclose(last.sum(-1), torch.ones(B, device=last.device), atol=1e-4)
+
     maps = contrib.reshape(B, g, g).cpu()
     up = upsample_maps(maps, S)
     ent = normalized_entropy(contrib).cpu()                                            # 1.0 = perfectly uniform map
+    maps_last = last.reshape(B, g, g).cpu()
+    up_last = upsample_maps(maps_last, S)
+    ent_last = normalized_entropy(last).cpu()
+    corr = torch.stack([torch.corrcoef(torch.stack([contrib[i], last[i]]))[0, 1] for i in range(B)]).cpu()
     disp = (x.cpu() * 0.5 + 0.5).clamp(0, 1).permute(0, 2, 3, 1).numpy()
 
-    print(f"\n  {'image':<34}{'H/Hmax':>8}   peak patch (row,col)   peak share")
+    print(f"\n  {'':<34}{'rollout':>22}{'last layer':>22}{'corr':>7}")
+    print(f"  {'image':<34}{'H/Hmax  peak (r,c)':>22}{'H/Hmax  peak (r,c)':>22}{'':>7}")
     for i, p in enumerate(paths):
-        k = int(contrib[i].argmax())
-        print(f"  {os.path.basename(p)[:33]:<34}{ent[i]:>8.3f}   ({k // g},{k % g}){'':<14}{contrib[i, k]:.3f}")
+        k1, k2 = int(contrib[i].argmax()), int(last[i].argmax())
+        c1 = f"{ent[i]:.3f}  ({k1 // g},{k1 % g})"
+        c2 = f"{ent_last[i]:.3f}  ({k2 // g},{k2 % g})"
+        print(f"  {os.path.basename(p)[:33]:<34}{c1:>22}{c2:>22}{corr[i]:>7.2f}")
     print("  H/Hmax near 1.0 means the map is almost uniform (little structure to interpret).")
+    print("  corr = Pearson correlation between the rollout map and the last-layer map of the same image.")
 
     pca, ratio, pos_share = pca_rgb(out.cpu(), g)                                      # joint PCA over all images
     pca_up = F.interpolate(pca.permute(0, 3, 1, 2), size=(S, S), mode="nearest").permute(0, 2, 3, 1)   # 1 patch = 1 block
@@ -266,22 +289,26 @@ def main():
     print(f"\n  PCA (joint over {B} images, {B * N} patches): variance explained PC1/PC2/PC3 = {pct}")
     print(f"  positional share PC1/PC2/PC3 = {pos}" + (f"   (chance ~ {1.0 / B:.2f}; near 1.0 = the component only encodes location)" if B >= 2 else ""))
 
-    fig, ax = plt.subplots(3, B, figsize=(2.4 * B + 0.8, 8.0), squeeze=False)
+    fig, ax = plt.subplots(4, B, figsize=(2.4 * B + 0.8, 10.6), squeeze=False)
     for i, p in enumerate(paths):
         ax[0, i].imshow(disp[i]); ax[0, i].set_title(os.path.basename(p)[:22], fontsize=7); ax[0, i].axis("off")
         ax[1, i].imshow(disp[i]); ax[1, i].imshow(up[i].numpy(), cmap=a.cmap, alpha=a.alpha, vmin=0, vmax=1)
         ax[1, i].set_title(f"H/Hmax = {ent[i]:.3f}", fontsize=7); ax[1, i].axis("off")
-        ax[2, i].imshow(pca_up[i].numpy()); ax[2, i].axis("off")
-    for r, t in enumerate(["Image", f"{label}\nattention", f"{label}\nPCA"]):
+        ax[2, i].imshow(disp[i]); ax[2, i].imshow(up_last[i].numpy(), cmap=a.cmap, alpha=a.alpha, vmin=0, vmax=1)
+        ax[2, i].set_title(f"H/Hmax = {ent_last[i]:.3f}", fontsize=7); ax[2, i].axis("off")
+        ax[3, i].imshow(pca_up[i].numpy()); ax[3, i].axis("off")
+    for r, t in enumerate(["Image", f"{label}\nrollout", f"{label}\nlast layer", f"{label}\nPCA"]):
         ax[r, 0].text(-0.04, 0.5, t, transform=ax[r, 0].transAxes, rotation=90, va="center", ha="right", fontsize=10, fontweight="bold")
-    fig.suptitle("Row 2: patch contribution to the evaluation embedding (attention rollout), each map min-max normalised\n"
-                 f"Row 3: PCA of final patch features, fitted jointly on all images; variance explained {pct}; "
+    fig.suptitle("Row 2: patch contribution to the evaluation embedding (attention rollout over all layers)\n"
+                 "Row 3: last layer only, averaged over heads and over queries (attention received)   [maps min-max normalised]\n"
+                 f"Row 4: PCA of final patch features, fitted jointly on all images; variance explained {pct}; "
                  f"positional share {pos}", fontsize=8)
-    plt.tight_layout(rect=[0.02, 0, 1, 0.95], h_pad=2.0)
+    plt.tight_layout(rect=[0.02, 0, 1, 0.94], h_pad=2.0)
     plt.savefig(a.out, dpi=150, bbox_inches="tight", pad_inches=0.15)
     npz = os.path.splitext(a.out)[0] + ".npz"
     np.savez(npz, maps=maps.numpy(), paths=np.array(paths), entropy=ent.numpy(), label=label, grid=g,
-             pca_rgb=pca.numpy(), pca_var_ratio=ratio.numpy(), pca_pos_share=pos_share.numpy())
+             pca_rgb=pca.numpy(), pca_var_ratio=ratio.numpy(), pca_pos_share=pos_share.numpy(),
+             last_layer_maps=maps_last.numpy(), last_layer_entropy=ent_last.numpy(), rollout_vs_last_corr=corr.numpy())
     print(f"\nsaved {a.out} and {npz}")
 
 
