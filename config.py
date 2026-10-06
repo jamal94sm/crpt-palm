@@ -495,7 +495,14 @@ def get_cfg(args=None):
         help="X-Palm root, for cross-dataset eval when it is NOT the "
              "training set.")
 
-    
+    p.add_argument("--save_ckpt", nargs="*", default=None,
+        help="Save the inference model of the listed baselines as "
+             "ckpt_{baseline}_train_{train_datasets}.pth in --output_dir: the encoder "
+             "used for evaluation (target encoder for the JEPA family; student/teacher/"
+             "online encoder for the others). Names are the --baselines keys (e.g. jepa "
+             "palmjepa dinov2); case, '-' and '_' are ignored ('palm-jepa' == 'palmjepa'); "
+             "'all' = every baseline. Only the first seed of a multi-seed run is saved.")
+
     # ─── Misc ─────────────────────────────────────────────────
     p.add_argument("--seed", type=int, default=2025)
     p.add_argument("--device", default="cuda")
@@ -537,5 +544,13 @@ def get_cfg(args=None):
         cfg.gabor_scales = tuple(tuple(s) for s in json.loads(cfg.gabor_scales))
     else:
         cfg.gabor_scales = BASE_SCALE_LADDER[:cfg.gabor_num_scales]
+
+    if cfg.save_ckpt:
+        norm = lambda s: str(s).lower().replace("-", "").replace("_", "").replace(" ", "")
+        valid = {norm(s["key"]) for s in BASELINE_SPECS} | {"all"}
+        bad = [n for n in cfg.save_ckpt if norm(n) not in valid]
+        if bad:
+            raise SystemExit(f"--save_ckpt: unknown {bad}. Valid: "
+                             f"{[s['key'] for s in BASELINE_SPECS]} or 'all'")
 
     return cfg
