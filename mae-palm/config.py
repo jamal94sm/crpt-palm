@@ -25,7 +25,19 @@ def get_cfg(args=None):
     # ─── Mode ─────────────────────────────────────────────────
     p.add_argument("--mode", default="all",
         choices=["all", "cross_domain", "cross_domain_openset",
-                 "cross_brand_openset"])
+                 "cross_brand_openset", "cross_dataset"])
+    # ─── cross_dataset mode ───────────────────────────────────
+    p.add_argument("--train_datasets", nargs="*", default=None,
+                   choices=["casiams", "xjtu", "xpalm"],
+                   help="cross_dataset mode: datasets used for training "
+                        "(all subsets, all identities, concatenated).")
+    p.add_argument("--test_datasets", nargs="*", default=None,
+                   choices=["casiams", "xjtu", "xpalm"],
+                   help="cross_dataset mode: unseen datasets evaluated at the end "
+                        "of training. Default: every dataset not in --train_datasets.")
+    p.add_argument("--xpalm_scanner", type=int, default=1, choices=[0, 1],
+                   help="cross_dataset mode: 1 = include the X-Palm scanner images, "
+                        "0 = smartphone images only (applies to X-Palm as train and as test).")
     p.add_argument("--train_spectrums", nargs="*", default=["WHT", "940"])
     p.add_argument("--test_spectrums", nargs="*", default=None)
     p.add_argument("--train_brands", nargs="*", default=["iPhone"])
