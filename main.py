@@ -65,6 +65,7 @@ from line_masking import line_saliency, ridge_saliency, patchify_line_guided, ta
 #from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, context_consistency_loss
 from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, DMTPredictor
 from ci_utils import run_multi_seed
+from ckpt_utils import maybe_save_ckpt
 
 CASIA_MEAN = [0.5, 0.5, 0.5]                    # matches dataset.py's Normalize()
 CASIA_STD  = [0.5, 0.5, 0.5]
@@ -830,6 +831,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
     
     target_encoder.eval()
+    maybe_save_ckpt(cfg, target_encoder, "jepa")
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
         print(f"\n  ── Cross-dataset evaluation (final epoch only) ──")
@@ -1022,6 +1024,7 @@ def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
                   f"Mean EER={mean_eer:.2f}%\n")
 
     model.eval()
+    maybe_save_ckpt(cfg, model.backbone, "compnet")
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
         print(f"\n  ── Cross-dataset evaluation (final epoch only) ──")
@@ -1150,6 +1153,7 @@ def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
                   f"Mean EER={mean_eer:.2f}%\n")
 
     model.eval()
+    maybe_save_ckpt(cfg, model, "vit_sup", skip_prefixes=("classifier.",))
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
         print(f"\n  ── Cross-dataset evaluation (final epoch only) ──")
