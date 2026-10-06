@@ -11,6 +11,15 @@ contributes to that embedding, via attention rollout (Abnar & Zuidema, 2020):
     map         c_j = (1/N) * sum_i R[i,j]                               (mean pooling = average over i)
 c sums to 1 over the N patches. Reshaped row-major to (grid, grid).
 
+SECOND ROW: PCA map of the final patch features (what the features encode, not where information flows from)
+    Z = final patch tokens of ALL images stacked (B*N x D); centre; top-3 principal components via SVD;
+    scores P = (Z - mean) @ V[:3]^T; each score is clipped to its 2-98 percentile and mapped to R, G, B.
+    The PCA is fitted JOINTLY on all images, so one colour means the same kind of feature in every image.
+    Colours are arbitrary per model (only the grouping of patches can be compared, not the hue).
+    Printed with it: variance explained per component, and each component's POSITIONAL SHARE (how much of its
+    variance is the same in every image at a given patch position; ~1/B is chance, ~1 means the component just
+    encodes location and not image content).
+
 Run from the repo root (models.py importable):
   python visualize_attention.py --ckpt out_domain_analysis_xjtu/JEPA_context_encoder.pth \
       --label "SA-JEPA" --images a.jpg b.jpg c.jpg d.jpg e.jpg
@@ -138,6 +147,41 @@ def normalized_entropy(contrib):
     return -(contrib * (contrib + 1e-12).log()).sum(-1) / math.log(contrib.shape[-1])
 
 
+def pca_scores(tokens, k=3):
+    """tokens: (B, N, D). Joint PCA over all B*N tokens (SVD of the centred matrix).
+    Returns scores (B, N, k), explained-variance ratios (k,), and positional shares (k,).
+    Component signs are fixed deterministically (largest-|loading| entry positive)."""
+    B, N, D = tokens.shape
+    X = tokens.reshape(B * N, D).double()
+    Xc = X - X.mean(0, keepdim=True)
+    _, S, Vh = torch.linalg.svd(Xc, full_matrices=False)
+    var = S ** 2 / max(B * N - 1, 1)
+    ratio = var[:k] / (var.sum() + 1e-12)
+    comp = Vh[:k]
+    sign = torch.sign(comp[torch.arange(k), comp.abs().argmax(1)])
+    sign[sign == 0] = 1.0
+    comp = comp * sign[:, None]
+    P = (Xc @ comp.T).reshape(B, N, k)
+    if B >= 2:      # variance of the per-position means / total variance (population variances => within [0, 1])
+        pos_share = P.mean(0).var(0, unbiased=False) / (P.reshape(-1, k).var(0, unbiased=False) + 1e-12)
+    else:
+        pos_share = torch.full((k,), float("nan"), dtype=P.dtype)
+    return P.float(), ratio.float(), pos_share.float()
+
+
+def pca_rgb(tokens, grid, clip=2.0):
+    """tokens: (B, N, D) -> rgb (B, grid, grid, 3) in [0, 1], variance ratios (3,), positional shares (3,).
+    Each component is clipped to its [clip, 100-clip] percentile over ALL patches of ALL images, then scaled to [0, 1]."""
+    B, N, _ = tokens.shape
+    assert N == grid * grid, f"{N} tokens do not form a {grid}x{grid} grid"
+    P, ratio, pos_share = pca_scores(tokens, 3)
+    flat = P.reshape(-1, 3)
+    lo = torch.quantile(flat, clip / 100.0, dim=0)
+    hi = torch.quantile(flat, 1.0 - clip / 100.0, dim=0)
+    rgb = ((flat - lo) / (hi - lo + 1e-12)).clamp(0, 1)
+    return rgb.reshape(B, grid, grid, 3), ratio, pos_share
+
+
 # ───────────────────────── images ─────────────────────────
 def pick_images(args):
     if args.images:
@@ -213,18 +257,29 @@ def main():
         print(f"  {os.path.basename(p)[:33]:<34}{ent[i]:>8.3f}   ({k // g},{k % g}){'':<14}{contrib[i, k]:.3f}")
     print("  H/Hmax near 1.0 means the map is almost uniform (little structure to interpret).")
 
-    fig, ax = plt.subplots(2, B, figsize=(2.4 * B + 0.8, 5.4), squeeze=False)
+    pca, ratio, pos_share = pca_rgb(out.cpu(), g)                                      # joint PCA over all images
+    pca_up = F.interpolate(pca.permute(0, 3, 1, 2), size=(S, S), mode="nearest").permute(0, 2, 3, 1)   # 1 patch = 1 block
+    pct = " / ".join(f"{100 * r:.1f}%" for r in ratio.tolist())
+    pos = " / ".join(f"{v:.2f}" for v in pos_share.tolist()) if B >= 2 else "n/a (needs >= 2 images)"
+    print(f"\n  PCA (joint over {B} images, {B * N} patches): variance explained PC1/PC2/PC3 = {pct}")
+    print(f"  positional share PC1/PC2/PC3 = {pos}" + (f"   (chance ~ {1.0 / B:.2f}; near 1.0 = the component only encodes location)" if B >= 2 else ""))
+
+    fig, ax = plt.subplots(3, B, figsize=(2.4 * B + 0.8, 8.0), squeeze=False)
     for i, p in enumerate(paths):
         ax[0, i].imshow(disp[i]); ax[0, i].set_title(os.path.basename(p)[:22], fontsize=7); ax[0, i].axis("off")
         ax[1, i].imshow(disp[i]); ax[1, i].imshow(up[i].numpy(), cmap=a.cmap, alpha=a.alpha, vmin=0, vmax=1)
         ax[1, i].set_title(f"H/Hmax = {ent[i]:.3f}", fontsize=7); ax[1, i].axis("off")
-    for r, t in enumerate(["Image", label]):
+        ax[2, i].imshow(pca_up[i].numpy()); ax[2, i].axis("off")
+    for r, t in enumerate(["Image", f"{label}\nattention", f"{label}\nPCA"]):
         ax[r, 0].text(-0.04, 0.5, t, transform=ax[r, 0].transAxes, rotation=90, va="center", ha="right", fontsize=10, fontweight="bold")
-    fig.suptitle("Patch contribution to the evaluation embedding (attention rollout); each map min-max normalised", fontsize=8)
-    plt.tight_layout(rect=[0.02, 0, 1, 0.96], h_pad=2.0)
+    fig.suptitle("Row 2: patch contribution to the evaluation embedding (attention rollout), each map min-max normalised\n"
+                 f"Row 3: PCA of final patch features, fitted jointly on all images; variance explained {pct}; "
+                 f"positional share {pos}", fontsize=8)
+    plt.tight_layout(rect=[0.02, 0, 1, 0.95], h_pad=2.0)
     plt.savefig(a.out, dpi=150, bbox_inches="tight", pad_inches=0.15)
     npz = os.path.splitext(a.out)[0] + ".npz"
-    np.savez(npz, maps=maps.numpy(), paths=np.array(paths), entropy=ent.numpy(), label=label, grid=g)
+    np.savez(npz, maps=maps.numpy(), paths=np.array(paths), entropy=ent.numpy(), label=label, grid=g,
+             pca_rgb=pca.numpy(), pca_var_ratio=ratio.numpy(), pca_pos_share=pos_share.numpy())
     print(f"\nsaved {a.out} and {npz}")
 
 
