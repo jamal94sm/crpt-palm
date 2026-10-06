@@ -489,12 +489,14 @@ class FeatureExtractor(nn.Module):
         self.encoder.eval()
 
     def forward(self, x):
-        B = x.size(0)
-        P = self.encoder.pos_embed.size(1)
-        device = x.device
-        full_mask = [torch.arange(P, device=device).unsqueeze(0).expand(B, -1)]
         with torch.no_grad():
-            z = self.encoder(x, full_mask)
+            if isinstance(self.encoder, TargetEncoder):
+                z = self.encoder(x)                  # TargetEncoder always sees all patches
+            else:
+                B = x.size(0)
+                P = self.encoder.pos_embed.size(1)
+                full_mask = [torch.arange(P, device=x.device).unsqueeze(0).expand(B, -1)]
+                z = self.encoder(x, full_mask)
         return z.mean(dim=1)
 
 
