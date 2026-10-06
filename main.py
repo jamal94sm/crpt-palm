@@ -444,7 +444,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     print(f"  Training JEPA ({total_steps} steps)")
     print(f"{'─'*70}")
 
-    feature_extractor = FeatureExtractor(context_encoder)
+    feature_extractor = FeatureExtractor(target_encoder)
+    print("  Evaluation encoder: TARGET (EMA of the context encoder)")
     global_step = 0
     eval_history = []
     best_eval = {"epoch": 0, "mean_rank1": 0}
@@ -780,7 +781,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
         if epoch % cfg.eval_every == 0 or epoch == cfg.epochs:
             print(f"\n  ── Eval at epoch {epoch} ──")
-            context_encoder.eval()
+            target_encoder.eval()
             eval_results = run_full_eval(
                 feature_extractor, eval_dict, cfg,
                 tag=f"[ep{epoch}] ")
@@ -828,7 +829,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                   f"Mean EER={mean_eer:.2f}%\n")
 
     
-    context_encoder.eval()
+    target_encoder.eval()
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
         print(f"\n  ── Cross-dataset evaluation (final epoch only) ──")
