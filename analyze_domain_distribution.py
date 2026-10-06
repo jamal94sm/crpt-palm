@@ -279,15 +279,15 @@ def train_plain_jepa(cfg, train_loader, eval_dict):
     print(f"\n Building JEPA (analysis run)...")
     context_encoder = ContextEncoder(img_size, cfg.num_patches, cfg.embed_dim).to(cfg.device)
 
-    ckpt_path = CHECKPOINT_PATHS.get("jepa") or os.path.join(OUTPUT_DIR, "JEPA_context_encoder.pth")
+    target_encoder = TargetEncoder(img_size, cfg.num_patches, cfg.embed_dim).to(cfg.device)
+
+    ckpt_path = CHECKPOINT_PATHS.get("jepa") or os.path.join(OUTPUT_DIR, "JEPA_target_encoder.pth")
     if ckpt_path and os.path.isfile(ckpt_path):
         print(f" Found existing checkpoint: {ckpt_path} -- loading, SKIPPING training.")
-        context_encoder.load_state_dict(torch.load(ckpt_path, map_location=cfg.device))
-        context_encoder.eval()
-        return FeatureExtractor(context_encoder)
+        target_encoder.load_state_dict(torch.load(ckpt_path, map_location=cfg.device))
+        target_encoder.eval()
+        return FeatureExtractor(target_encoder)
     print(f" No existing checkpoint at {ckpt_path} -- training from scratch.")
-
-    target_encoder = TargetEncoder(img_size, cfg.num_patches, cfg.embed_dim).to(cfg.device)
     predictor = Predictor(cfg.num_patches, cfg.embed_dim,
                           norm_struct_out=bool(cfg.norm_struct_out)).to(cfg.device)
 
@@ -316,7 +316,7 @@ def train_plain_jepa(cfg, train_loader, eval_dict):
         return cfg.ema_start + (cfg.ema_end - cfg.ema_start) * step / max(1, total_steps)
 
     print(f" Training ({total_steps} steps)...")
-    feature_extractor = FeatureExtractor(context_encoder)
+    feature_extractor = FeatureExtractor(target_encoder)
     global_step = 0
     for epoch in range(1, cfg.epochs + 1):
         context_encoder.train()
@@ -360,7 +360,7 @@ def train_plain_jepa(cfg, train_loader, eval_dict):
 
         if epoch % EVAL_EVERY == 0 or epoch == cfg.epochs:
             print(f"\n  ── Eval at epoch {epoch} ──")
-            context_encoder.eval()
+            target_encoder.eval()
 
             train_samples = train_loader.dataset.samples
             train_id_map = build_id_map(train_samples)
@@ -377,12 +377,12 @@ def train_plain_jepa(cfg, train_loader, eval_dict):
             print(f"    Summary: Mean R1={mean_r1:.2f}% | Mean EER (incl. seen_dom_seen_id)={mean_eer:.2f}%\n")
             context_encoder.train()
 
-    context_encoder.eval()
-    save_path = os.path.join(OUTPUT_DIR, "JEPA_context_encoder.pth")
-    torch.save(context_encoder.state_dict(), save_path)
+    target_encoder.eval()
+    save_path = os.path.join(OUTPUT_DIR, "JEPA_target_encoder.pth")
+    torch.save(target_encoder.state_dict(), save_path)
     print(f" Saved checkpoint: {save_path}")
     print(" Training complete.\n")
-    return FeatureExtractor(context_encoder)
+    return FeatureExtractor(target_encoder)
 
 
 # ═══════════════════════════════════════════════════════════════
