@@ -377,6 +377,15 @@ def build_cross_dataset_eval_dict(cfg):
     dataset (not the training one) that has its root dir configured via
     --casia_dir/--xjtu_dir/--xpalm_dir. Datasets without a configured dir
     are skipped with a printed note, not an error."""
+    if getattr(cfg, "mode", None) == "cross_dataset":
+        _, test_keys = resolve_cross_dataset_args(cfg)
+        out = {}
+        for key in test_keys:
+            print(f"      Scanning test dataset '{key}' ...")
+            out[f"cross_{key}"] = _eval_entry_from_samples(cfg, scan_named_dataset(key, cfg))
+            print(f"      '{key}': {out[f'cross_{key}']['n_samples']} samples, "
+                  f"{out[f'cross_{key}']['n_ids']} IDs")
+        return out
     own_key = normalize_dataset_key(cfg.data_dir)
     dir_by_key = {"casiams": getattr(cfg, "casia_dir", None),
                   "xjtu": getattr(cfg, "xjtu_dir", None),
@@ -399,8 +408,124 @@ def build_cross_dataset_eval_dict(cfg):
 
 
 # ══════════════════════════════════════════════════════════════
-#  Build everything for a given mode
+#  cross_dataset mode: train on one or more datasets, test on unseen ones
 # ══════════════════════════════════════════════════════════════
+
+DATASET_ROOTS = {
+    "casiams": "/home/pai-ng/Jamal/CASIA-MS-ROI",
+    "xjtu":    "/home/pai-ng/Jamal/XJTU-UP",
+    "xpalm":   "/home/pai-ng/Jamal/xpalm",
+}
+ALL_DATASETS = tuple(DATASET_ROOTS)
+
+
+def scan_named_dataset(key, cfg):
+    """ALL samples (every subset / domain / identity) of one dataset, from its
+    hard-coded root. CASIA-MS is turned into 3-channel RGB by CASIADataset
+    (.convert("RGB")) and then follows the same pipeline as XJTU-UP / X-Palm.
+    X-Palm honours --xpalm_scanner (1 = scanner + smartphone, 0 = smartphone
+    only), whether it is a training or a test dataset."""
+    root = DATASET_ROOTS[key]
+    if not os.path.isdir(root):
+        raise SystemExit(f"cross_dataset: root of '{key}' not found: {root} "
+                         f"(edit DATASET_ROOTS in dataset.py)")
+    samples = scan_by_key(key, root)
+    if key == "xpalm" and not int(getattr(cfg, "xpalm_scanner", 1)):
+        n0 = len(samples)
+        samples = [s for s in samples if s.get("device") != "scanner"]
+        print(f"  [X-Palm] scanner excluded: {n0} -> {len(samples)} samples (smartphone only)")
+    if not samples:
+        raise SystemExit(f"cross_dataset: no samples found for '{key}' at {root}")
+    return samples
+
+
+def _eval_entry_from_samples(cfg, samples):
+    """One eval_dict entry (gallery/probe loaders + counts) from a sample list,
+    with an identity map local to those samples. Same gallery/probe protocol
+    (--gallery_ratio, --seed) as every other eval set."""
+    id_map = build_id_map(samples)
+    gal_samples, prb_samples = split_gallery_probe(
+        samples, id_map, cfg.gallery_ratio, cfg.seed)
+    gal_ds = CASIADataset(gal_samples, id_map, cfg.img_size, augment=False)
+    prb_ds = CASIADataset(prb_samples, id_map, cfg.img_size, augment=False)
+    return {
+        "gallery_loader": DataLoader(gal_ds, batch_size=cfg.batch_size,
+                                     shuffle=False, num_workers=cfg.num_workers),
+        "probe_loader": DataLoader(prb_ds, batch_size=cfg.batch_size,
+                                   shuffle=False, num_workers=cfg.num_workers),
+        "n_samples": len(samples),
+        "n_ids": len(set(s["identity"] for s in samples)),
+        "n_gallery": len(gal_samples),
+        "n_probe": len(prb_samples),
+    }
+
+
+def resolve_cross_dataset_args(cfg):
+    """Validate / fill --train_datasets and --test_datasets (in place)."""
+    train = list(dict.fromkeys(cfg.train_datasets or []))
+    if not train:
+        raise SystemExit("--mode cross_dataset needs --train_datasets (casiams / xjtu / xpalm)")
+    test = list(dict.fromkeys(cfg.test_datasets or [k for k in ALL_DATASETS if k not in train]))
+    if not test:
+        raise SystemExit("cross_dataset: nothing left to test on -- use fewer "
+                         "--train_datasets or give --test_datasets")
+    both = set(train) & set(test)
+    if both:
+        raise SystemExit(f"cross_dataset: {sorted(both)} in both --train_datasets and --test_datasets")
+    cfg.train_datasets, cfg.test_datasets = train, test
+    return train, test
+
+
+def build_datasets_cross_dataset(cfg):
+    """Same return signature as build_datasets().
+      - train set = ALL samples of ALL --train_datasets, concatenated; the
+        loader's shuffle=True mixes the datasets randomly every epoch.
+      - eval_dict = {"seen_dom_seen_id"} only (gallery/probe from the training
+        samples) -> printed every --eval_every epochs.
+      - the main result (unseen --test_datasets) is evaluated once at the end
+        of training through build_cross_dataset_eval_dict()."""
+    train_keys, test_keys = resolve_cross_dataset_args(cfg)
+
+    if getattr(cfg, "gabor_gray", 0) == 1:
+        print("  [cross_dataset] --gabor_gray 1 -> 0: every dataset (CASIA-MS is read as "
+              "RGB) uses the same per-channel Gabor path")
+        cfg.gabor_gray = 0
+    cfg.use_cross_dataset_eval = 1            # the end-of-training evaluation IS the main result
+    if not getattr(cfg, "data_dir", None):
+        cfg.data_dir = "cross_dataset:" + "+".join(train_keys)    # label for logs only
+
+    print(f"\n  Mode: cross_dataset   Train: {train_keys}   "
+          f"Test (end of training): {test_keys}")
+    if "xpalm" in train_keys + test_keys:
+        print(f"  X-Palm scanner images: "
+              f"{'INCLUDED' if int(cfg.xpalm_scanner) else 'EXCLUDED (smartphone only)'}")
+
+    train_samples, owner = [], {}
+    for key in train_keys:
+        s = scan_named_dataset(key, cfg)
+        ids = set(x["identity"] for x in s)
+        for ident in ids:
+            if ident in owner:
+                raise SystemExit(f"cross_dataset: identity '{ident}' occurs in both "
+                                 f"'{owner[ident]}' and '{key}'")
+            owner[ident] = key
+        print(f"  Train dataset '{key}': {len(s)} samples, {len(ids)} IDs")
+        train_samples += s
+
+    train_id_map = build_id_map(train_samples)
+    n_train_ids = len(train_id_map)
+    print(f"  Train samples: {len(train_samples)} "
+          f"(×{cfg.aug_multiplier} aug = {len(train_samples) * cfg.aug_multiplier})   "
+          f"Training IDs: {n_train_ids}")
+
+    train_ds = CASIADataset(train_samples, train_id_map, cfg.img_size,
+                            augment=True, aug_multiplier=cfg.aug_multiplier)
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,
+                              num_workers=cfg.num_workers, drop_last=True,
+                              pin_memory=True)
+
+    eval_dict = {"seen_dom_seen_id": _eval_entry_from_samples(cfg, train_samples)}
+    return train_loader, eval_dict, train_id_map, n_train_ids, train_id_map
 
 
 # ══════════════════════════════════════════════════════════════
@@ -411,6 +536,11 @@ def build_datasets(cfg):
     """
     Returns: train_loader, eval_dict, id_map (global), n_train_ids
     """
+    if cfg.mode == "cross_dataset":
+        return build_datasets_cross_dataset(cfg)
+    if not cfg.data_dir:
+        raise SystemExit("--data_dir is required for every mode except cross_dataset")
+
     if "xjtu" in cfg.data_dir.lower():
         all_samples = scan_xjtu(cfg.data_dir)
     elif "xpalm" in cfg.data_dir.lower():
