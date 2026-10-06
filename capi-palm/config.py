@@ -10,7 +10,7 @@ import argparse
 def get_cfg(args=None):
     p = argparse.ArgumentParser(description="CAPI on palmprints")
 
-    p.add_argument("--data_dir", required=True, default="/home/pai-ng/Jamal/CASIA-MS-ROI")
+    p.add_argument("--data_dir", default=None)
     p.add_argument("--img_size", type=int, default=112)
     p.add_argument("--mode", default="all",
         choices=["all", "cross_domain", "cross_domain_openset", "cross_brand_openset", "cross_dataset"])
