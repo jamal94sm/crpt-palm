@@ -152,6 +152,8 @@ def pca_scores(tokens, k=3):
     Returns scores (B, N, k), explained-variance ratios (k,), and positional shares (k,).
     Component signs are fixed deterministically (largest-|loading| entry positive)."""
     B, N, D = tokens.shape
+    if center_per_image:                      # drop the global (colour / illumination) component
+        tokens = tokens - tokens.mean(1, keepdim=True)
     X = tokens.reshape(B * N, D).double()
     Xc = X - X.mean(0, keepdim=True)
     _, S, Vh = torch.linalg.svd(Xc, full_matrices=False)
