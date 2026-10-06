@@ -147,7 +147,7 @@ def normalized_entropy(contrib):
     return -(contrib * (contrib + 1e-12).log()).sum(-1) / math.log(contrib.shape[-1])
 
 
-def pca_scores(tokens, k=3):
+def pca_scores(tokens, k=3, center_per_image=True):
     """tokens: (B, N, D). Joint PCA over all B*N tokens (SVD of the centred matrix).
     Returns scores (B, N, k), explained-variance ratios (k,), and positional shares (k,).
     Component signs are fixed deterministically (largest-|loading| entry positive)."""
