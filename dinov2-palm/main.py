@@ -27,7 +27,7 @@ from dino_losses import DINOLoss, iBOTPatchLoss, KoLeoLoss
 from masking import make_mask_generator, build_ibot_masks
 from multicrop_dataset import MultiCropDataset, multicrop_collate
 from evaluate import run_full_eval
-
+from ckpt_utils import maybe_save_ckpt
 
 # ══════════════════ ecosystem plumbing (same as the other baselines) ══════════════════
 def set_seed(seed):
@@ -350,6 +350,7 @@ def train_dinov2(cfg, train_loader, eval_dict, out_path):
                 print(f" \u2605 New best EER={mean_eer:.2f}% (R1={mean_r1:.2f}%)")
             print(f" Summary: Mean R1={mean_r1:.2f}% | Mean EER={mean_eer:.2f}%\n")
 
+    maybe_save_ckpt(cfg, teacher["backbone"], "dinov2")
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
         print(f"\n ── Cross-dataset evaluation (final epoch only) ──")
