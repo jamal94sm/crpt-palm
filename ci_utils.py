@@ -165,6 +165,14 @@ def _shared_flags(cfg):
     if getattr(cfg, "test_brands", None):
         flags.append("--test_brands")
         flags += [str(b) for b in cfg.test_brands]
+    if getattr(cfg, "mode", None) == "cross_dataset":
+        if getattr(cfg, "train_datasets", None):
+            flags.append("--train_datasets")
+            flags += [str(d) for d in cfg.train_datasets]
+        if getattr(cfg, "test_datasets", None):
+            flags.append("--test_datasets")
+            flags += [str(d) for d in cfg.test_datasets]
+        flags += ["--xpalm_scanner", str(int(getattr(cfg, "xpalm_scanner", 1)))]
     flags += ["--use_CI", "1", "--n_runs", str(getattr(cfg, "n_runs", 3)),
               "--ci_level", str(getattr(cfg, "ci_level", 0.95)),
               "--output_dir", os.path.abspath(cfg.output_dir)]
