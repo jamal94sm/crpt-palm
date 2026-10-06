@@ -460,7 +460,11 @@ def run_all_baselines(cfg):
             
         print(f"\n{'#'*80}\n  BASELINE: {spec['name']}")
         print(f"  CMD: {' '.join(cmd)}\n{'#'*80}\n")
-        subprocess.run(cmd, cwd=cwd, check=True)
+        child_env = dict(os.environ)
+        child_env["CKPT_KEY"] = spec["key"]                  # tag used in the checkpoint file name
+        if getattr(cfg, "save_ckpt", None):
+            child_env["SAVE_CKPT"] = ",".join(cfg.save_ckpt)
+        subprocess.run(cmd, cwd=cwd, check=True, env=child_env)
 
         results[spec["name"]] = _parse_summary_csv(out_file)
 
