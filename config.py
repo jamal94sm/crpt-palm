@@ -21,7 +21,27 @@ from gabor import BASE_SCALE_LADDER
                "--w_a2", "0.3",
                "--gabor_orient", "12", "--gabor_gamma", "0.25",
                "--gabor_num_scales", "5"]
-               
+
+{"key": "palmjepa_lg", "name": "SA-JEPA-LG", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3",
+               "--mask_mode", "line_guided", "--saliency_mode", "gabor",
+               "--line_mask_eps", "0.5", "--line_mask_tau", "0.5"]},
+    {"key": "palmjepa_lgr", "name": "SA-JEPA-LG-ridge", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3",
+               "--mask_mode", "line_guided", "--saliency_mode", "ridge",
+               "--line_mask_eps", "0.5", "--line_mask_tau", "0.5"]},
+    {"key": "palmjepa_blk", "name": "SA-JEPA-3blk", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3",
+               "--num_blocks", "3", "--trg_ratio", "0.15", "0.20"]}
 '''
 
 
@@ -61,26 +81,6 @@ BASELINE_SPECS = [
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
                "--w_a2", "0.3"]},
-    {"key": "palmjepa_lg", "name": "SA-JEPA-LG", "script": "self",
-     "extra": ["--method", "jepa", "--use_corruption", "1",
-               "--gabor_gray", "0",
-               "--struct_mode", "a2", "--struct_loss", "infonce",
-               "--w_a2", "0.3",
-               "--mask_mode", "line_guided", "--saliency_mode", "gabor",
-               "--line_mask_eps", "0.5", "--line_mask_tau", "0.5"]},
-    {"key": "palmjepa_lgr", "name": "SA-JEPA-LG-ridge", "script": "self",
-     "extra": ["--method", "jepa", "--use_corruption", "1",
-               "--gabor_gray", "0",
-               "--struct_mode", "a2", "--struct_loss", "infonce",
-               "--w_a2", "0.3",
-               "--mask_mode", "line_guided", "--saliency_mode", "ridge",
-               "--line_mask_eps", "0.5", "--line_mask_tau", "0.5"]},
-    {"key": "palmjepa_blk", "name": "SA-JEPA-3blk", "script": "self",
-     "extra": ["--method", "jepa", "--use_corruption", "1",
-               "--gabor_gray", "0",
-               "--struct_mode", "a2", "--struct_loss", "infonce",
-               "--w_a2", "0.3",
-               "--num_blocks", "3", "--trg_ratio", "0.15", "0.20"]}
 ]
 
 SHARED_ARG_NAMES = ["data_dir", "mode", "embed_dim", "num_patches", "epochs",
