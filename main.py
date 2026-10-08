@@ -163,6 +163,8 @@ def ckpt_name(cfg):
         dataset = "xjtu"
     elif "xpalm" in dataset:
         dataset = "xpalm"
+    elif "mpdv2" in dataset:
+        dataset = "mpdv2"
 
     domain = "-".join(cfg.train_spectrums) if cfg.train_spectrums else "all"
     return f"ckpt_{dataset}_{cfg.method}_{domain}.pth"
