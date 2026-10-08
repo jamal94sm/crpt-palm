@@ -124,11 +124,11 @@ def get_cfg(args=None):
      
     # ─── cross_dataset mode ───────────────────────────────────
     p.add_argument("--train_datasets", nargs="*", default=None,
-                   choices=["casiams", "xjtu", "xpalm"],
+                   choices=["casiams", "xjtu", "xpalm", "mpdv2"],
                    help="cross_dataset mode: datasets used for training "
                         "(all subsets, all identities, concatenated).")
     p.add_argument("--test_datasets", nargs="*", default=None,
-                   choices=["casiams", "xjtu", "xpalm"],
+                   choices=["casiams", "xjtu", "xpalm", "mpdv2"],
                    help="cross_dataset mode: unseen datasets evaluated at the end "
                         "of training. Default: every dataset not in --train_datasets.")
     p.add_argument("--xpalm_scanner", type=int, default=1, choices=[0, 1],
@@ -499,6 +499,9 @@ def get_cfg(args=None):
              "training set.")
     p.add_argument("--xpalm_dir", type=str, default=None,
         help="X-Palm root, for cross-dataset eval when it is NOT the "
+             "training set.")
+    p.add_argument("--mpdv2_dir", type=str, default=None,
+        help="MPDv2 root, for cross-dataset eval when it is NOT the "
              "training set.")
 
     p.add_argument("--save_ckpt", nargs="*", default=None,
