@@ -340,9 +340,9 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             gamma=cfg.gabor_gamma,
             per_channel=not bool(getattr(cfg, "gabor_gray", 1)),
         ).to(cfg.device)
-    use_saliency = (sal_mode == "ridge") or (gabor_bank is not None)
-    print(f"  Masking: {cfg.mask_mode}"
-          + ("" if use_line_mask else "  (I-JEPA multi-block, uniform placement)"))
+    use_saliency = use_line_mask            # saliency is computed / logged only for line-guided masking
+    if use_line_mask:
+        print(f"  Masking: {cfg.mask_mode}")
     if use_saliency:
         if sal_mode == "ridge":
             r_px = int(math.ceil(3 * max(cfg.ridge_sigmas)))
@@ -412,7 +412,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
           f"  Supervision: {'ON' if use_sup else 'OFF'}"
           f"  C-JEPA: {'ON' if use_cjepa else 'OFF'}"
           f"  DMT-JEPA: {'ON' if use_dmtjepa else 'OFF'}"
-          f"  Line-guided masking: {('ON (' + sal_mode + ')') if use_line_mask else 'OFF'}")
+          + (f"  Line-guided masking: ON ({sal_mode})" if use_line_mask else ""))
 
     # NOTE: context_agg_head is now a SUBMODULE of predictor (DMTPredictor
     # holds it directly) when use_dmtjepa -- list(predictor.parameters())
@@ -496,7 +496,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             with torch.no_grad():
                 if gabor_bank is not None:
                     gabor_resp = gabor_bank(images)
-                if sal_mode == "ridge":
+                if use_line_mask and sal_mode == "ridge":
                     if first_batch:
                         saliency, sal_lines = ridge_saliency(
                             images, cfg.num_patches, sigmas=tuple(cfg.ridge_sigmas),
@@ -505,7 +505,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                         saliency = ridge_saliency(
                             images, cfg.num_patches, sigmas=tuple(cfg.ridge_sigmas),
                             line_frac=cfg.ridge_line_frac, clip=sal_clip)
-                elif gabor_resp is not None:
+                elif use_line_mask and gabor_resp is not None:
                     saliency = line_saliency(
                         gabor_resp, cfg.num_patches, border=gabor_bank.pad,
                         use_selectivity=bool(cfg.line_mask_select), clip=sal_clip)
@@ -771,7 +771,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             if n_topq > 0:
                 print(f"           masking={cfg.mask_mode} saliency={sal_mode}: "
                       f"targets in top-25% line saliency = {ep_topq:.3f}  "
-                      f"(compare to a mask_mode=random run with the same --saliency_mode)")
+                      f"(uniform random placement gives ~0.25)")
               
             if (use_struct or use_sup) and cfg.log_conflict:
                 msg = f"           conflict_cos={ep_conflict:+.4f}"
