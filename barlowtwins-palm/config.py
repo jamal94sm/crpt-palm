@@ -109,6 +109,9 @@ def get_cfg(args=None):
     p.add_argument("--casia_dir", type=str, default=None)
     p.add_argument("--xjtu_dir", type=str, default=None)
     p.add_argument("--xpalm_dir", type=str, default=None)
+    p.add_argument("--mpdv2_dir", type=str, default=None,
+        help="MPDv2 root, for cross-dataset eval when it is NOT the "
+             "training set.")
     p.add_argument("--test_spectrums", nargs="*", default=None)
     p.add_argument("--train_brands", nargs="*", default=["iPhone"])
     p.add_argument("--test_brands", nargs="*", default=None)
