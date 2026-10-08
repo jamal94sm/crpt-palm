@@ -178,7 +178,7 @@ def _shared_flags(cfg):
               "--output_dir", os.path.abspath(cfg.output_dir)]
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
         flags += ["--use_cross_dataset_eval", "1"]
-        for name in ("casia_dir", "xjtu_dir", "xpalm_dir"):
+        for name in ("casia_dir", "xjtu_dir", "xpalm_dir", "mpdv2_dir"):
             val = getattr(cfg, name, None)
             if val:
                 flags += [f"--{name}", val]
