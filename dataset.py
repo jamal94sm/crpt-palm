@@ -329,6 +329,8 @@ def normalize_dataset_key(data_dir):
         return "xjtu"
     if "xpalm" in name:
         return "xpalm"
+    if "mpdv2" in name:
+        return "mpdv2"
     return name
 
 
@@ -338,6 +340,8 @@ def scan_by_key(key, data_dir):
         return scan_xjtu(data_dir)
     if key == "xpalm":
         return scan_xpalm(data_dir)
+    if key == "mpdv2":
+        return scan_mpdv2(data_dir)
     return scan_dataset(data_dir)          # "casiams" or anything else
 
 
@@ -389,8 +393,10 @@ def build_cross_dataset_eval_dict(cfg):
     own_key = normalize_dataset_key(cfg.data_dir)
     dir_by_key = {"casiams": getattr(cfg, "casia_dir", None),
                   "xjtu": getattr(cfg, "xjtu_dir", None),
-                  "xpalm": getattr(cfg, "xpalm_dir", None)}
-    flag_by_key = {"casiams": "casia_dir", "xjtu": "xjtu_dir", "xpalm": "xpalm_dir"}
+                  "xpalm": getattr(cfg, "xpalm_dir", None),
+                  "mpdv2": getattr(cfg, "mpdv2_dir", None)}
+    flag_by_key = {"casiams": "casia_dir", "xjtu": "xjtu_dir",
+                   "xpalm": "xpalm_dir", "mpdv2": "mpdv2_dir"}
 
     cross_eval_dict = {}
     for key, other_dir in dir_by_key.items():
@@ -415,6 +421,7 @@ DATASET_ROOTS = {
     "casiams": "/home/pai-ng/Jamal/CASIA-MS-ROI",
     "xjtu":    "/home/pai-ng/Jamal/XJTU-UP",
     "xpalm":   "/home/pai-ng/Jamal/xpalm",
+    "mpdv2":   "/home/pai-ng/Jamal/MPDv2_mediapipe_manual_roi",
 }
 ALL_DATASETS = tuple(DATASET_ROOTS)
 
@@ -464,7 +471,7 @@ def resolve_cross_dataset_args(cfg):
     """Validate / fill --train_datasets and --test_datasets (in place)."""
     train = list(dict.fromkeys(cfg.train_datasets or []))
     if not train:
-        raise SystemExit("--mode cross_dataset needs --train_datasets (casiams / xjtu / xpalm)")
+        raise SystemExit("--mode cross_dataset needs --train_datasets (casiams / xjtu / xpalm / mpdv2)")
     test = list(dict.fromkeys(cfg.test_datasets or [k for k in ALL_DATASETS if k not in train]))
     if not test:
         raise SystemExit("cross_dataset: nothing left to test on -- use fewer "
@@ -545,6 +552,8 @@ def build_datasets(cfg):
         all_samples = scan_xjtu(cfg.data_dir)
     elif "xpalm" in cfg.data_dir.lower():
         all_samples = scan_xpalm(cfg.data_dir)
+    elif "mpdv2" in cfg.data_dir.lower():
+        all_samples = scan_mpdv2(cfg.data_dir)
     else:
         all_samples = scan_dataset(cfg.data_dir)
         
@@ -782,6 +791,38 @@ def scan_xjtu(data_root):
                         })
                         ids.add(identity)
     print(f"  [XJTU] {len(samples)} samples, {len(ids)} identities from {data_root}")
+    return samples
+
+
+# ============================================================
+#  MPDv2 dataset
+# ============================================================
+
+def scan_mpdv2(data_root):
+    """MPDv2: flat folder, name = {subject}_{session}_{device}_{hand}_{iter}.jpg
+       e.g. 001_1_h_l_07.jpg
+       identity = MPDV2_{subject}_{hand}   (left / right hand = different IDs;
+                                            session is ignored for identity)
+       spectrum = device ('h' or 'm')      (the 2 domains)
+    """
+    samples, ids = [], set()
+    for fname in sorted(os.listdir(data_root)):
+        if not fname.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")):
+            continue
+        parts = os.path.splitext(fname)[0].split("_")
+        if len(parts) != 5:
+            continue
+        subject, session, device, hand, _ = parts
+        if device not in ("h", "m") or hand not in ("l", "r"):
+            continue
+        identity = f"MPDV2_{subject}_{hand}"
+        samples.append({
+            "path": os.path.join(data_root, fname),
+            "identity": identity,
+            "spectrum": device,
+        })
+        ids.add(identity)
+    print(f"  [MPDv2] {len(samples)} samples, {len(ids)} identities from {data_root}")
     return samples
 
 
