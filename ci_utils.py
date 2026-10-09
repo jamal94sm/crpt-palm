@@ -464,6 +464,10 @@ def run_all_baselines(cfg):
         child_env["CKPT_KEY"] = spec["key"]                  # tag used in the checkpoint file name
         if getattr(cfg, "save_ckpt", None):
             child_env["SAVE_CKPT"] = ",".join(cfg.save_ckpt)
+        if getattr(cfg, "ckpt_select", None):
+            child_env["CKPT_SELECT"] = cfg.ckpt_select
+        if getattr(cfg, "best_metric", None):
+            child_env["BEST_METRIC"] = cfg.best_metric
         subprocess.run(cmd, cwd=cwd, check=True, env=child_env)
 
         results[spec["name"]] = _parse_summary_csv(out_file)
