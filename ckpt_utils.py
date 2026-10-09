@@ -50,3 +50,50 @@ def maybe_save_ckpt(cfg, module, default_tag, skip_prefixes=()):
     _SAVED.add((tag, label))
     print(f"  Saved inference checkpoint: {path}  ({len(sd)} tensors, seed {cfg.seed})")
     return path
+
+
+class BestTracker:
+    """--ckpt_select last|best, --best_metric eer|r1.
+    'best' = the epoch with the best mean EER (or R1) over the TRAINING
+    dataset/domain eval sets (names starting with 'seen_dom'); unseen
+    domains/datasets never influence the choice."""
+
+    def __init__(self, cfg):
+        self.select = getattr(cfg, "ckpt_select", None) or os.environ.get("CKPT_SELECT") or "last"
+        self.metric = getattr(cfg, "best_metric", None) or os.environ.get("BEST_METRIC") or "eer"
+        self.score = None
+        self.entry = None
+        self.state = None
+        self.label = ""
+
+    def _score(self, eval_results):
+        keys = [k for k in eval_results if k.startswith("seen_dom")] or list(eval_results)
+        if self.metric == "r1":
+            return sum(eval_results[k]["rank1"] for k in keys) / len(keys)
+        return -sum(eval_results[k]["eer"] for k in keys) / len(keys)     # higher = better
+
+    def update(self, eval_results, eval_entry, module):
+        """Call right after eval_history.append(eval_entry)."""
+        if self.select != "best":
+            return
+        s = self._score(eval_results)
+        if self.score is None or s > self.score:
+            self.score, self.entry = s, eval_entry
+            self.state = {k: v.detach().cpu().clone() for k, v in module.state_dict().items()}
+            val = s if self.metric == "r1" else -s
+            print(f"    ◆ best-so-far for model selection ({self.metric.upper()} on training "
+                  f"set = {val:.2f}%) -> epoch {eval_entry['epoch']}")
+
+    def finalize(self, module, eval_history):
+        """Call after the training loop, BEFORE maybe_save_ckpt / cross-dataset eval.
+        Restores the chosen weights and returns the chosen eval_history entry."""
+        if self.select == "best" and self.state is not None:
+            module.load_state_dict(self.state)
+            entry = self.entry
+            self.label = (f"BEST epoch = {entry['epoch']} by {self.metric.upper()} "
+                          f"on training set")
+        else:
+            entry = eval_history[-1]
+            self.label = f"LAST epoch = {entry['epoch']}"
+        print(f"\n  Model used for saving / cross-dataset eval / reporting: {self.label}")
+        return entry
