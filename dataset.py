@@ -382,13 +382,22 @@ def build_cross_dataset_eval_dict(cfg):
     --casia_dir/--xjtu_dir/--xpalm_dir. Datasets without a configured dir
     are skipped with a printed note, not an error."""
     if getattr(cfg, "mode", None) == "cross_dataset":
-        _, test_keys = resolve_cross_dataset_args(cfg)
+        train_keys, test_keys = resolve_cross_dataset_args(cfg)
         out = {}
         for key in test_keys:
             print(f"      Scanning test dataset '{key}' ...")
-            out[f"cross_{key}"] = _eval_entry_from_samples(cfg, scan_named_dataset(key, cfg))
+            samples = scan_named_dataset(key, cfg)
+            note = ""
+            if key in train_keys:                       # dataset is ALSO a training dataset
+                if _overlap_policy(cfg) == "id_holdout":
+                    _, held_ids = _overlap_id_split(samples, cfg)
+                    samples = [s for s in samples if s["identity"] in held_ids]
+                    note = "  [also a TRAIN dataset: HELD-OUT identities only]"
+                else:
+                    note = "  [also a TRAIN dataset: WHOLE dataset, seen data]"
+            out[f"cross_{key}"] = _eval_entry_from_samples(cfg, samples)
             print(f"      '{key}': {out[f'cross_{key}']['n_samples']} samples, "
-                  f"{out[f'cross_{key}']['n_ids']} IDs")
+                  f"{out[f'cross_{key}']['n_ids']} IDs{note}")
         return out
     own_key = normalize_dataset_key(cfg.data_dir)
     dir_by_key = {"casiams": getattr(cfg, "casia_dir", None),
@@ -476,11 +485,37 @@ def resolve_cross_dataset_args(cfg):
     if not test:
         raise SystemExit("cross_dataset: nothing left to test on -- use fewer "
                          "--train_datasets or give --test_datasets")
-    both = set(train) & set(test)
-    if both:
-        raise SystemExit(f"cross_dataset: {sorted(both)} in both --train_datasets and --test_datasets")
+    both = sorted(set(train) & set(test))
+    if both and not getattr(cfg, "_overlap_announced", False):
+        cfg._overlap_announced = True                   # resolve is called more than once
+        if _overlap_policy(cfg) == "id_holdout":
+            print(f"  [cross_dataset] {both} in BOTH train and test -> identity hold-out: "
+                  f"train on {cfg.train_id_ratio:.0%} of its identities, test on the other "
+                  f"{1 - cfg.train_id_ratio:.0%} (unseen identities).")
+        else:
+            print(f"  !! [cross_dataset] {both} in BOTH train and test -> WHOLE dataset is used "
+                  f"for both. The result on {both} is a SEEN-data result (same identities and "
+                  f"images as training), NOT a generalisation result.")
     cfg.train_datasets, cfg.test_datasets = train, test
     return train, test
+
+
+def _overlap_policy(cfg):
+    """How a dataset that is in BOTH --train_datasets and --test_datasets is used.
+      "whole"      (default) the whole dataset is used for training AND for testing.
+      "id_holdout" identities of that dataset are split with --train_id_ratio: the
+                   train part is trained on, the held-out identities are the test set
+                   (identity-disjoint, so the test numbers are still 'unseen identity')."""
+    return getattr(cfg, "overlap_policy", "whole")
+
+
+def _overlap_id_split(samples, cfg):
+    """Deterministic (cfg.seed) identity split of ONE dataset -> (train_ids, held_ids).
+    Called from both the train side and the test side, so they always agree."""
+    ids = sorted(set(s["identity"] for s in samples))
+    random.Random(cfg.seed).shuffle(ids)
+    n_tr = int(len(ids) * cfg.train_id_ratio)
+    return set(ids[:n_tr]), set(ids[n_tr:])
 
 
 def build_datasets_cross_dataset(cfg):
@@ -510,6 +545,12 @@ def build_datasets_cross_dataset(cfg):
     train_samples, owner = [], {}
     for key in train_keys:
         s = scan_named_dataset(key, cfg)
+        if key in test_keys and _overlap_policy(cfg) == "id_holdout":
+            tr_ids, _ = _overlap_id_split(s, cfg)
+            n_all = len(s)
+            s = [x for x in s if x["identity"] in tr_ids]
+            print(f"  Train dataset '{key}' is also a TEST dataset -> identity hold-out: "
+                  f"{len(tr_ids)} train IDs kept ({n_all} -> {len(s)} samples)")
         ids = set(x["identity"] for x in s)
         for ident in ids:
             if ident in owner:
