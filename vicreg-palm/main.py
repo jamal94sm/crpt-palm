@@ -28,7 +28,7 @@ from paired_dataset import PairedCASIADataset
 from models import Encoder, Expander, FeatureExtractor
 from vicreg_loss import vicreg_loss
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable
 
 
 def exclude_bias_and_norm(p):
@@ -228,7 +228,12 @@ def train_vicreg(cfg, train_loader, eval_dict, out_path):
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
 
     global_step = 0
-    for epoch in range(1, cfg.epochs + 1):
+    tracker = BestTracker(cfg)
+    resume = Resumable(cfg, "vicreg", modules={"encoder": encoder, "expander": expander},
+                       optims={"opt": opt})
+    epochs_done, global_step = resume.load()
+
+    for epoch in range(epochs_done + 1, cfg.epochs + 1):
         encoder.train()
         expander.train()
 
@@ -280,6 +285,7 @@ def train_vicreg(cfg, train_loader, eval_dict, out_path):
             for name, r in eval_results.items():
                 eval_entry[name] = r
             eval_history.append(eval_entry)
+            tracker.update(eval_results, eval_entry, encoder)
 
             if mean_eer < best_eval["mean_eer"]:
                 best_eval = {"epoch": epoch, "mean_rank1": mean_r1,
@@ -306,10 +312,12 @@ def train_vicreg(cfg, train_loader, eval_dict, out_path):
             print()
 
     encoder.eval()
+    resume.save(cfg.epochs, global_step)
+    final_entry = tracker.finalize(encoder, eval_history)
     maybe_save_ckpt(cfg, encoder, "vicreg")
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
-        print(f"\n ── Cross-dataset evaluation (final epoch only) ──")
+        print(f"\n ── Cross-dataset evaluation ({tracker.label}) ──")
         cross_eval_dict = build_cross_dataset_eval_dict(cfg)
         if cross_eval_dict:
             cross_dataset_results = run_full_eval(
@@ -339,16 +347,18 @@ def train_vicreg(cfg, train_loader, eval_dict, out_path):
 
     write_config_block(out_path, cfg, header=f"RUN CONFIG (seed={cfg.seed})")
     append_text(out_path, f"\nRESULTS -- method=vicreg mode={cfg.mode} "
-                           f"seed={cfg.seed} (LAST epoch = {eval_history[-1]['epoch']})\n"
+                           f"seed={cfg.seed} ({tracker.label})\n"
                            f"{table_text}\n")
-    append_text(out_path, f"\nCROSS-DATASET EVALUATION (final epoch only, "
+    append_text(out_path, f"\nSELECTED MODEL RESULTS ({tracker.label})\n"
+                          f"{tracker.selected_text(final_entry)}\n")
+    append_text(out_path, f"\nCROSS-DATASET EVALUATION ({tracker.label}, "
                            f"trained on {cfg.data_dir})\n{cross_text}\n")
     print(f"\n Saved: {out_path}")
 
     if cross_dataset_results and eval_history:
-        eval_history[-1].update(cross_dataset_results)
+        final_entry.update(cross_dataset_results)
 
-    return eval_history[-1] if eval_history else None
+    return final_entry if eval_history else None
 
 
 def run_multi_seed(cfg, out_path):
