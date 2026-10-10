@@ -534,6 +534,9 @@ def get_cfg(args=None):
     p.add_argument("--device", default="cuda")
     p.add_argument("--output_dir", default="./output_jepa")
 
+    p.add_argument("--overlap_policy", default="whole", choices=["whole", "id_holdout"])
+
+     
     cfg = p.parse_args(args)
 
     # ─── Line-guided masking checks ───────────────────────────
