@@ -25,7 +25,7 @@ from dataset import build_datasets, build_cross_dataset_eval_dict
 from models import MAEEncoder, MAEDecoder, FeatureExtractor
 from patchify import patchify, normalize_pixel_target
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable
 
 def set_seed(seed):
     random.seed(seed)
@@ -177,7 +177,12 @@ def train_mae(cfg, train_loader, eval_dict, out_path):
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
     global_step = 0
 
-    for epoch in range(1, cfg.epochs + 1):
+    tracker = BestTracker(cfg)
+    resume = Resumable(cfg, "mae", modules={"encoder": encoder, "decoder": decoder},
+                       optims={"opt": opt})
+    epochs_done, global_step = resume.load()
+
+    for epoch in range(epochs_done + 1, cfg.epochs + 1):
         encoder.train()
         decoder.train()
 
@@ -226,6 +231,7 @@ def train_mae(cfg, train_loader, eval_dict, out_path):
             for name, r in eval_results.items():
                 eval_entry[name] = r
             eval_history.append(eval_entry)
+            tracker.update(eval_results, eval_entry, encoder)
 
             if mean_eer < best_eval["mean_eer"]:
                 best_eval = {"epoch": epoch, "mean_rank1": mean_r1, "mean_eer": mean_eer}
@@ -234,10 +240,12 @@ def train_mae(cfg, train_loader, eval_dict, out_path):
             print(f" Summary: Mean R1={mean_r1:.2f}% | Mean EER={mean_eer:.2f}%\n")
 
     encoder.eval()
+    resume.save(cfg.epochs, global_step)
+    final_entry = tracker.finalize(encoder, eval_history)
     maybe_save_ckpt(cfg, encoder, "mae")
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
-        print(f"\n ── Cross-dataset evaluation (final epoch only) ──")
+        print(f"\n ── Cross-dataset evaluation ({tracker.label}) ──")
         cross_eval_dict = build_cross_dataset_eval_dict(cfg)
         if cross_eval_dict:
             cross_dataset_results = run_full_eval(feature_extractor, cross_eval_dict, cfg, tag="[cross-dataset] ")
@@ -281,16 +289,18 @@ def train_mae(cfg, train_loader, eval_dict, out_path):
 
     write_config_block(out_path, cfg, header=f"RUN CONFIG (seed={cfg.seed})")
     append_text(out_path, f"\nRESULTS -- method=mae mode={cfg.mode} "
-                           f"seed={cfg.seed} (LAST epoch = {eval_history[-1]['epoch']})\n"
+                           f"seed={cfg.seed} ({tracker.label})\n"
                            f"{table_text}\n")
-    append_text(out_path, f"\nCROSS-DATASET EVALUATION (final epoch only, "
+    append_text(out_path, f"\nSELECTED MODEL RESULTS ({tracker.label})\n"
+                          f"{tracker.selected_text(final_entry)}\n")
+    append_text(out_path, f"\nCROSS-DATASET EVALUATION ({tracker.label}, "
                            f"trained on {cfg.data_dir})\n{cross_text}\n")
     print(f"\n Saved: {out_path}")
 
     if cross_dataset_results and eval_history:
-        eval_history[-1].update(cross_dataset_results)
+        final_entry.update(cross_dataset_results)
 
-    return eval_history[-1] if eval_history else None
+    return final_entry if eval_history else None
 
 
 def run_multi_seed(cfg, out_path):
