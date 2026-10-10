@@ -468,6 +468,10 @@ def run_all_baselines(cfg):
             child_env["CKPT_SELECT"] = cfg.ckpt_select
         if getattr(cfg, "best_metric", None):
             child_env["BEST_METRIC"] = cfg.best_metric
+        if getattr(cfg, "save_resume", None) is not None:
+            child_env["SAVE_RESUME"] = str(cfg.save_resume)
+        if getattr(cfg, "resume_from", None):
+            child_env["RESUME_FROM"] = os.path.abspath(cfg.resume_from)
         subprocess.run(cmd, cwd=cwd, check=True, env=child_env)
 
         results[spec["name"]] = _parse_summary_csv(out_file)
