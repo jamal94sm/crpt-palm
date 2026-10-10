@@ -25,7 +25,7 @@ from paired_dataset import PairedCASIADataset
 from models import Encoder, Expander, Predictor, FeatureExtractor, update_ema
 from byol_loss import byol_loss
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable
 
 def exclude_bias_and_norm(p):
     """Official filter (facebookresearch/vicreg, structurally identical to
@@ -251,7 +251,12 @@ def train_byol(cfg, train_loader, eval_dict, out_path):
     global_step = 0
     momentum = cfg.ema_start
 
-    for epoch in range(1, cfg.epochs + 1):
+    tracker = BestTracker(cfg)
+    resume = Resumable(cfg, "byol", modules={"online_encoder": online_encoder, "online_expander": online_expander, "predictor": predictor, "target_encoder": target_encoder, "target_expander": target_expander},
+                       optims={"opt": opt})
+    epochs_done, global_step = resume.load()
+
+    for epoch in range(epochs_done + 1, cfg.epochs + 1):
         online_encoder.train()
         online_expander.train()
         predictor.train()
@@ -316,6 +321,7 @@ def train_byol(cfg, train_loader, eval_dict, out_path):
             for name, r in eval_results.items():
                 eval_entry[name] = r
             eval_history.append(eval_entry)
+            tracker.update(eval_results, eval_entry, online_encoder)
 
             if mean_eer < best_eval["mean_eer"]:
                 best_eval = {"epoch": epoch, "mean_rank1": mean_r1, "mean_eer": mean_eer}
@@ -324,10 +330,12 @@ def train_byol(cfg, train_loader, eval_dict, out_path):
             print(f" Summary: Mean R1={mean_r1:.2f}% | Mean EER={mean_eer:.2f}%\n")
 
     online_encoder.eval()
+    resume.save(cfg.epochs, global_step)
+    final_entry = tracker.finalize(online_encoder, eval_history)
     maybe_save_ckpt(cfg, online_encoder, "byol")
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
-        print(f"\n ── Cross-dataset evaluation (final epoch only) ──")
+        print(f"\n ── Cross-dataset evaluation ({tracker.label}) ──")
         cross_eval_dict = build_cross_dataset_eval_dict(cfg)
         if cross_eval_dict:
             cross_dataset_results = run_full_eval(feature_extractor, cross_eval_dict, cfg, tag="[cross-dataset] ")
@@ -372,16 +380,18 @@ def train_byol(cfg, train_loader, eval_dict, out_path):
 
     write_config_block(out_path, cfg, header=f"RUN CONFIG (seed={cfg.seed})")
     append_text(out_path, f"\nRESULTS -- method=byol mode={cfg.mode} "
-                           f"seed={cfg.seed} (LAST epoch = {eval_history[-1]['epoch']})\n"
+                           f"seed={cfg.seed} ({tracker.label})\n"
                            f"{table_text}\n")
-    append_text(out_path, f"\nCROSS-DATASET EVALUATION (final epoch only, "
+    append_text(out_path, f"\nSELECTED MODEL RESULTS ({tracker.label})\n"
+                          f"{tracker.selected_text(final_entry)}\n")
+    append_text(out_path, f"\nCROSS-DATASET EVALUATION ({tracker.label}, "
                            f"trained on {cfg.data_dir})\n{cross_text}\n")
     print(f"\n Saved: {out_path}")
 
     if cross_dataset_results and eval_history:
-        eval_history[-1].update(cross_dataset_results)
+        final_entry.update(cross_dataset_results)
 
-    return eval_history[-1] if eval_history else None
+    return final_entry if eval_history else None
 
 
 def run_multi_seed(cfg, out_path):
