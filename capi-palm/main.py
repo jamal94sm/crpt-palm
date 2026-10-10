@@ -34,7 +34,7 @@ from models import CapiEncoderDecoder, FeatureExtractor
 from rope_sk import OnlineClustering, L2NormLinear
 from masking import collate_capi_masks
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable
 
 def set_seed(seed):
     random.seed(seed)
@@ -211,7 +211,12 @@ def train_capi(cfg, train_loader, eval_dict, out_path):
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
     global_step = 0
 
-    for epoch in range(cfg.epochs):
+    tracker = BestTracker(cfg)
+    resume = Resumable(cfg, "capi", modules={"student_backbone": student_backbone, "teacher_backbone": teacher_backbone, "student_head": student_head, "teacher_head": teacher_head},
+                       optims={"opt": opt, "clustering_opt": clustering_opt})
+    epochs_done, global_step = resume.load()
+
+    for epoch in range(epochs_done, cfg.epochs):
         student_backbone.train()
         student_head.train()
         teacher_backbone.eval()
@@ -289,16 +294,19 @@ def train_capi(cfg, train_loader, eval_dict, out_path):
             entry["mean_rank1"], entry["mean_eer"] = mean_r1, mean_eer
             entry.update(eval_results)
             eval_history.append(entry)
+            tracker.update(eval_results, entry, teacher_backbone)
             if mean_eer < best_eval["mean_eer"]:
                 best_eval = {"epoch": ep, "mean_rank1": mean_r1, "mean_eer": mean_eer}
                 print(f" \u2605 New best EER={mean_eer:.2f}% (R1={mean_r1:.2f}%)")
             print(f" Summary: Mean R1={mean_r1:.2f}% | Mean EER={mean_eer:.2f}%\n")
 
     teacher_backbone.eval()
+    resume.save(cfg.epochs, global_step)
+    final_entry = tracker.finalize(teacher_backbone, eval_history)
     maybe_save_ckpt(cfg, teacher_backbone, "capi")
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
-        print(f"\n ── Cross-dataset evaluation (final epoch only) ──")
+        print(f"\n ── Cross-dataset evaluation ({tracker.label}) ──")
         cross_eval_dict = build_cross_dataset_eval_dict(cfg)
         if cross_eval_dict:
             cross_dataset_results = run_full_eval(feature_extractor, cross_eval_dict, cfg, tag="[cross-dataset] ")
@@ -335,12 +343,14 @@ def train_capi(cfg, train_loader, eval_dict, out_path):
           f"(R1={best_eval['mean_rank1']:.2f}%, EER={best_eval['mean_eer']:.2f}%)\n{'='*80}")
     write_config_block(out_path, cfg, header=f"RUN CONFIG (seed={cfg.seed})")
     append_text(out_path, f"\nRESULTS -- method=capi mode={cfg.mode} seed={cfg.seed} "
-                          f"(LAST epoch = {eval_history[-1]['epoch']})\n{table_text}\n")
-    append_text(out_path, f"\nCROSS-DATASET EVALUATION (final epoch only, trained on {cfg.data_dir})\n{cross_text}\n")
+                          f"({tracker.label})\n{table_text}\n")
+    append_text(out_path, f"\nSELECTED MODEL RESULTS ({tracker.label})\n"
+                          f"{tracker.selected_text(final_entry)}\n")
+    append_text(out_path, f"\nCROSS-DATASET EVALUATION ({tracker.label}, trained on {cfg.data_dir})\n{cross_text}\n")
     print(f"\n Saved: {out_path}")
     if cross_dataset_results and eval_history:
-        eval_history[-1].update(cross_dataset_results)
-    return eval_history[-1] if eval_history else None
+        final_entry.update(cross_dataset_results)
+    return final_entry if eval_history else None
 
 
 def run_multi_seed(cfg, out_path):
