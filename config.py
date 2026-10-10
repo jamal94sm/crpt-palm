@@ -519,6 +519,15 @@ def get_cfg(args=None):
     p.add_argument("--best_metric", type=str, default=None, choices=["eer", "r1"],
         help="Criterion for --ckpt_select best: lowest mean EER (default) or "
              "highest mean Rank-1, on the training-set eval sets.")
+    p.add_argument("--save_resume", type=int, default=None, choices=[0, 1],
+        help="Also save a RESUMABLE last-epoch checkpoint "
+             "(ckpt_{tag}_train_{label}_resume.pth: all modules incl. EMA target, "
+             "optimizer, scheduler, epoch/step, config, RNG) for the baselines listed in "
+             "--save_ckpt. Default 1.")
+    p.add_argument("--resume_from", type=str, default=None,
+        help="Resume training from a *_resume.pth file (single method), or from a "
+             "DIRECTORY holding one per baseline (--run_all_baselines). --epochs is the "
+             "NEW TOTAL number of epochs (saved 100 + 50 more -> --epochs 150).")
 
     # ─── Misc ─────────────────────────────────────────────────
     p.add_argument("--seed", type=int, default=2025)
