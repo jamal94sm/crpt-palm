@@ -65,7 +65,7 @@ from line_masking import line_saliency, ridge_saliency, patchify_line_guided, ta
 #from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, context_consistency_loss
 from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, DMTPredictor
 from ci_utils import run_multi_seed
-from ckpt_utils import maybe_save_ckpt
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable
 
 CASIA_MEAN = [0.5, 0.5, 0.5]                    # matches dataset.py's Normalize()
 CASIA_STD  = [0.5, 0.5, 0.5]
@@ -453,7 +453,19 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     eval_history = []
     best_eval = {"epoch": 0, "mean_rank1": 0}
 
-    for epoch in range(1, cfg.epochs + 1):
+    tracker = BestTracker(cfg)
+    resume = Resumable(
+        cfg, "jepa",
+        modules={"context_encoder": context_encoder, "target_encoder": target_encoder,
+                 "predictor": predictor, "predictor_structure": predictor_structure,
+                 "struct_head": struct_head,
+                 "struct_head_a2": struct_head_a2 if struct_head_a2 is not struct_head else None,
+                 "sup_head": sup_head, "cjepa_projector": cjepa_projector,
+                 "task_weighter": task_weighter, "target_agg_head": target_agg_head},
+        optims={"opt": opt}, scheds={"scheduler": scheduler})
+    epochs_done, global_step = resume.load()
+
+    for epoch in range(epochs_done + 1, cfg.epochs + 1):
         context_encoder.train()
         predictor.train()
         target_encoder.eval()
@@ -821,7 +833,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             for name, r in eval_results.items():
                 eval_entry[name] = r
             eval_history.append(eval_entry)
-
+            tracker.update(eval_results, eval_entry, target_encoder)
+          
             if mean_r1 > best_eval["mean_rank1"]:
                 best_eval = {"epoch": epoch, "mean_rank1": mean_r1,
                              "mean_eer": mean_eer}
@@ -833,6 +846,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
     
     target_encoder.eval()
+    resume.save(cfg.epochs, global_step)                    # last-epoch full state (before best-restore)
+    final_entry = tracker.finalize(target_encoder, eval_history)
     maybe_save_ckpt(cfg, target_encoder, "jepa")
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
@@ -865,17 +880,18 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
     write_config_block(out_path, cfg, header=f"RUN CONFIG (seed={cfg.seed})")
     append_text(out_path, f"\nRESULTS -- method=jepa mode={cfg.mode} "
-                           f"seed={cfg.seed} (LAST epoch = {eval_history[-1]['epoch']})\n"
+                           f"seed={cfg.seed} ({tracker.label})\n"
                            f"{table_text}\n")
-    append_text(out_path, f"\nCROSS-DATASET EVALUATION (final epoch only, "
+    append_text(out_path, f"\nSELECTED MODEL RESULTS ({tracker.label})\n"
+                           f"{tracker.selected_text(final_entry)}\n")
+    append_text(out_path, f"\nCROSS-DATASET EVALUATION ({tracker.label}, "
                            f"trained on {cfg.data_dir})\n{cross_text}\n")
     print(f"\n  Saved: {out_path}")
 
     if cross_dataset_results and eval_history:
-        eval_history[-1].update(cross_dataset_results)
+        final_entry.update(cross_dataset_results)
 
-    return eval_history[-1] if eval_history else None
-
+    return final_entry if eval_history else None
 
 def _print_history_jepa(eval_history, eval_dict, use_a1=False, use_a2=False,
                          use_sup=False, use_cjepa=False, use_topq=False):
@@ -969,7 +985,12 @@ def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
     eval_history = []
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
 
-    for epoch in range(1, cfg.epochs + 1):
+    tracker = BestTracker(cfg)
+    resume = Resumable(cfg, "compnet", modules={"model": model},
+                       optims={"opt": opt}, scheds={"scheduler": scheduler})
+    epochs_done, global_step = resume.load()
+
+    for epoch in range(epochs_done + 1, cfg.epochs + 1):
         model.train()
         ep_loss, ep_correct, seen, n_bat = 0.0, 0, 0, 0
         t0 = time.time()
@@ -1015,6 +1036,7 @@ def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
             for name, r in eval_results.items():
                 eval_entry[name] = r
             eval_history.append(eval_entry)
+            tracker.update(eval_results, eval_entry, model.backbone)
 
             if mean_eer < best_eval["mean_eer"]:        # track MIN EER
                 best_eval = {"epoch": epoch, "mean_rank1": mean_r1,
@@ -1026,6 +1048,8 @@ def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
                   f"Mean EER={mean_eer:.2f}%\n")
 
     model.eval()
+    resume.save(cfg.epochs, global_step)
+    final_entry = tracker.finalize(model.backbone, eval_history)
     maybe_save_ckpt(cfg, model.backbone, "compnet")
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
@@ -1056,16 +1080,18 @@ def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
 
     write_config_block(out_path, cfg, header=f"RUN CONFIG (seed={cfg.seed})")
     append_text(out_path, f"\nRESULTS -- method=compnet mode={cfg.mode} "
-                           f"seed={cfg.seed} (LAST epoch = {eval_history[-1]['epoch']})\n"
+                           f"seed={cfg.seed} ({tracker.label})\n"
                            f"{table_text}\n")
-    append_text(out_path, f"\nCROSS-DATASET EVALUATION (final epoch only, "
+    append_text(out_path, f"\nSELECTED MODEL RESULTS ({tracker.label})\n"
+                           f"{tracker.selected_text(final_entry)}\n")
+    append_text(out_path, f"\nCROSS-DATASET EVALUATION ({tracker.label}, "
                            f"trained on {cfg.data_dir})\n{cross_text}\n")
     print(f"\n  Saved: {out_path}")
 
     if cross_dataset_results and eval_history:
-        eval_history[-1].update(cross_dataset_results)
+        final_entry.update(cross_dataset_results)
 
-    return eval_history[-1] if eval_history else None
+    return final_entry if eval_history else None
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1097,8 +1123,12 @@ def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
     global_step = 0
     eval_history = []
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
-
-    for epoch in range(1, cfg.epochs + 1):
+    tracker = BestTracker(cfg)
+    resume = Resumable(cfg, "vit_sup", modules={"model": model},
+                       optims={"opt": opt}, scheds={"scheduler": scheduler})
+    epochs_done, global_step = resume.load()
+  
+    for epoch in range(epochs_done + 1, cfg.epochs + 1):
         model.train()
         ep_loss, ep_correct, seen, n_bat = 0.0, 0, 0, 0
         t0 = time.time()
@@ -1144,7 +1174,8 @@ def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
             for name, r in eval_results.items():
                 eval_entry[name] = r
             eval_history.append(eval_entry)
-
+            tracker.update(eval_results, eval_entry, model)
+          
             if mean_eer < best_eval["mean_eer"]:        # track MIN EER
                 best_eval = {"epoch": epoch, "mean_rank1": mean_r1,
                              "mean_eer": mean_eer}
@@ -1155,6 +1186,8 @@ def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
                   f"Mean EER={mean_eer:.2f}%\n")
 
     model.eval()
+    resume.save(cfg.epochs, global_step)
+    final_entry = tracker.finalize(model, eval_history)
     maybe_save_ckpt(cfg, model, "vit_sup", skip_prefixes=("classifier.",))
     cross_dataset_results = {}
     if bool(getattr(cfg, "use_cross_dataset_eval", 0)):
@@ -1185,17 +1218,18 @@ def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
 
     write_config_block(out_path, cfg, header=f"RUN CONFIG (seed={cfg.seed})")
     append_text(out_path, f"\nRESULTS -- method=vit_sup mode={cfg.mode} "
-                           f"seed={cfg.seed} (LAST epoch = {eval_history[-1]['epoch']})\n"
+                           f"seed={cfg.seed} ({tracker.label})\n"
                            f"{table_text}\n")
-    append_text(out_path, f"\nCROSS-DATASET EVALUATION (final epoch only, "
+    append_text(out_path, f"\nSELECTED MODEL RESULTS ({tracker.label})\n"
+                           f"{tracker.selected_text(final_entry)}\n")
+    append_text(out_path, f"\nCROSS-DATASET EVALUATION ({tracker.label}, "
                            f"trained on {cfg.data_dir})\n{cross_text}\n")
     print(f"\n  Saved: {out_path}")
 
     if cross_dataset_results and eval_history:
-        eval_history[-1].update(cross_dataset_results)
+        final_entry.update(cross_dataset_results)
 
-    return eval_history[-1] if eval_history else None
-
+    return final_entry if eval_history else None
 
 # ══════════════════════════════════════════════════════════════
 #  History / footer printers (CompNet / ViT-sup)
