@@ -344,6 +344,7 @@ def scan_by_key(key, data_dir):
         return scan_mpdv2(data_dir)
     if key == "synthpalm":
         return scan_synthpalm(data_dir)
+    return scan_dataset(data_dir)          # "casiams" or anything else
 
 
 def build_cross_dataset_eval(cfg, other_key, other_data_dir):
