@@ -287,7 +287,7 @@ class CASIADataset(Dataset):
         s = self.samples[real_idx]
         img = Image.open(s["path"]).convert("RGB")
         img = self.transform(img)
-        label = self.id_map[s["identity"]]
+        label = -1 if s.get("unlabeled") else self.id_map[s["identity"]]
         return img, label
 
 
@@ -342,7 +342,8 @@ def scan_by_key(key, data_dir):
         return scan_xpalm(data_dir)
     if key == "mpdv2":
         return scan_mpdv2(data_dir)
-    return scan_dataset(data_dir)          # "casiams" or anything else
+    if key == "synthpalm":
+        return scan_synthpalm(data_dir)
 
 
 def build_cross_dataset_eval(cfg, other_key, other_data_dir):
@@ -431,8 +432,11 @@ DATASET_ROOTS = {
     "xjtu":    "/home/pai-ng/Jamal/XJTU-UP",
     "xpalm":   "/home/pai-ng/Jamal/xpalm",
     "mpdv2":   "/home/pai-ng/Jamal/MPDv2_mediapipe_manual_roi",
+    "synthpalm": "/mnt/data/Palmprints/diff-palm-generated-5k",
 }
-ALL_DATASETS = tuple(DATASET_ROOTS)
+UNLABELED_DATASETS = ("synthpalm",)       # training only, never a test set
+# default test list = every LABELED dataset not used for training
+ALL_DATASETS = tuple(k for k in DATASET_ROOTS if k not in UNLABELED_DATASETS)
 
 
 def scan_named_dataset(key, cfg):
@@ -485,6 +489,13 @@ def resolve_cross_dataset_args(cfg):
     if not test:
         raise SystemExit("cross_dataset: nothing left to test on -- use fewer "
                          "--train_datasets or give --test_datasets")
+    if any(k in UNLABELED_DATASETS for k in test):
+        raise SystemExit(f"cross_dataset: {list(UNLABELED_DATASETS)} are unlabeled "
+                         f"-> training only, cannot be in --test_datasets")
+    if all(k in UNLABELED_DATASETS for k in train):
+        raise SystemExit("cross_dataset: add at least one LABELED dataset to "
+                         "--train_datasets (needed for the 'seen' eval / best-epoch choice)")
+        
     both = sorted(set(train) & set(test))
     if both and not getattr(cfg, "_overlap_announced", False):
         cfg._overlap_announced = True                   # resolve is called more than once
@@ -528,6 +539,13 @@ def build_datasets_cross_dataset(cfg):
         of training through build_cross_dataset_eval_dict()."""
     train_keys, test_keys = resolve_cross_dataset_args(cfg)
 
+    if (any(k in UNLABELED_DATASETS for k in train_keys)
+            and (getattr(cfg, "method", "jepa") in ("compnet", "vit_sup")
+                 or int(getattr(cfg, "use_supervision", 0)))):
+        raise SystemExit("cross_dataset: unlabeled training datasets (synthpalm) work "
+                         "only with self-supervised methods (no vit_sup / compnet / "
+                         "--use_supervision 1)")
+
     if getattr(cfg, "gabor_gray", 0) == 1:
         print("  [cross_dataset] --gabor_gray 1 -> 0: every dataset (CASIA-MS is read as "
               "RGB) uses the same per-channel Gabor path")
@@ -557,12 +575,16 @@ def build_datasets_cross_dataset(cfg):
                 raise SystemExit(f"cross_dataset: identity '{ident}' occurs in both "
                                  f"'{owner[ident]}' and '{key}'")
             owner[ident] = key
-        print(f"  Train dataset '{key}': {len(s)} samples, {len(ids)} IDs")
+        if key in UNLABELED_DATASETS:
+            print(f"  Train dataset '{key}': {len(s)} samples, UNLABELED (self-supervised only)")
+        else:
+            print(f"  Train dataset '{key}': {len(s)} samples, {len(ids)} IDs")
         train_samples += s
 
-    train_id_map = build_id_map(train_samples)
+    labeled_samples = [x for x in train_samples if not x.get("unlabeled")]
+    train_id_map = build_id_map(labeled_samples)
     n_train_ids = len(train_id_map)
-    print(f"  Train samples: {len(train_samples)} "
+    print(f"  Train samples: {len(train_samples)} ({len(labeled_samples)} labeled) "
           f"(×{cfg.aug_multiplier} aug = {len(train_samples) * cfg.aug_multiplier})   "
           f"Training IDs: {n_train_ids}")
 
@@ -572,7 +594,7 @@ def build_datasets_cross_dataset(cfg):
                               num_workers=cfg.num_workers, drop_last=True,
                               pin_memory=True)
 
-    eval_dict = {"seen_dom_seen_id": _eval_entry_from_samples(cfg, train_samples)}
+    eval_dict = {"seen_dom_seen_id": _eval_entry_from_samples(cfg, labeled_samples)}
     return train_loader, eval_dict, train_id_map, n_train_ids, train_id_map
 
 
@@ -866,6 +888,24 @@ def scan_mpdv2(data_root):
     print(f"  [MPDv2] {len(samples)} samples, {len(ids)} identities from {data_root}")
     return samples
 
+def scan_synthpalm(data_root):
+    """synth-palm (diff-palm-generated-5k): UNLABELED synthetic palmprints.
+       Images are searched in all subfolders. No identity exists, so every image
+       gets a unique pseudo-identity 'SYNTH_<i>' and "unlabeled": True.
+       TRAINING ONLY (see UNLABELED_DATASETS)."""
+    IMG_EXTS = (".jpg", ".jpeg", ".png", ".bmp")
+    samples = []
+    for root, _, files in sorted(os.walk(data_root)):
+        for fname in sorted(files):
+            if fname.lower().endswith(IMG_EXTS):
+                samples.append({
+                    "path": os.path.join(root, fname),
+                    "identity": f"SYNTH_{len(samples)}",
+                    "spectrum": "synth",
+                    "unlabeled": True,
+                })
+    print(f"  [synth-palm] {len(samples)} unlabeled images from {data_root}")
+    return samples
 
 def scan_cifar10(n_images=2000, root="./cifar_cache", seed=42):
     """CIFAR-10 as CASIA-style sample dicts for a cross-DOMAIN (non-palmprint)
