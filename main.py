@@ -795,7 +795,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                 print(msg)
 
         if epoch % cfg.eval_every == 0 or epoch == cfg.epochs:
-            print(f"\n  ── Eval at epoch {epoch} ──")
+            print(f"\n  ── Eval at epoch {epoch} ──" if eval_dict else
+                  f"\n  ── Epoch {epoch}: no training-set eval (unlabeled-only training) ──")
             target_encoder.eval()
             eval_results = run_full_eval(
                 feature_extractor, eval_dict, cfg,
@@ -826,8 +827,11 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             if n_topq > 0:
                 eval_entry["topq"] = ep_topq
 
-            mean_r1 = np.mean([r["rank1"] for r in eval_results.values()])
-            mean_eer = np.mean([r["eer"] for r in eval_results.values()])
+            if eval_results:
+                mean_r1 = np.mean([r["rank1"] for r in eval_results.values()])
+                mean_eer = np.mean([r["eer"] for r in eval_results.values()])
+            else:                                   # unlabeled-only training: nothing to evaluate
+                mean_r1 = mean_eer = float("nan")
             eval_entry["mean_rank1"] = mean_r1
             eval_entry["mean_eer"] = mean_eer
             for name, r in eval_results.items():
@@ -841,8 +845,12 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                 print(f"    ★ New best R1={mean_r1:.2f}% "
                       f"EER={mean_eer:.2f}%")
 
-            print(f"    Summary: Mean R1={mean_r1:.2f}% | "
-                  f"Mean EER={mean_eer:.2f}%\n")
+            if eval_results:
+                print(f"    Summary: Mean R1={mean_r1:.2f}% | "
+                      f"Mean EER={mean_eer:.2f}%\n")
+            else:
+                print(f"    Summary: train loss={ep_loss:.4f}  sim={sim:.3f}  "
+                      f"(test datasets are evaluated once, at the end)\n")
 
     
     target_encoder.eval()
