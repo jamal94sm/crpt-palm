@@ -23,7 +23,7 @@ def get_cfg(args=None):
                  "cross_brand_openset", "cross_dataset"])
     # ─── cross_dataset mode ───────────────────────────────────
     p.add_argument("--train_datasets", nargs="*", default=None,
-                   choices=["casiams", "xjtu", "xpalm", "mpdv2", "synthpalm"],
+                   choices=["casiams", "xjtu", "xpalm", "mpdv2", "synthpalm", "realpalm"],
                    help="cross_dataset mode: datasets used for training "
                         "(all subsets, all identities, concatenated).")
     p.add_argument("--test_datasets", nargs="*", default=None,
