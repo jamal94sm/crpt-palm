@@ -343,8 +343,10 @@ def scan_by_key(key, data_dir):
     if key == "mpdv2":
         return scan_mpdv2(data_dir)
     if key == "synthpalm":
+    if key == "synthpalm":
         return scan_synthpalm(data_dir)
-    return scan_dataset(data_dir)          # "casiams" or anything else
+    if key == "realpalm":
+        return scan_realpalm(data_dir)
 
 
 def build_cross_dataset_eval(cfg, other_key, other_data_dir):
@@ -434,8 +436,9 @@ DATASET_ROOTS = {
     "xpalm":   "/home/pai-ng/Jamal/xpalm",
     "mpdv2":   "/home/pai-ng/Jamal/MPDv2_mediapipe_manual_roi",
     "synthpalm": "/mnt/data/Palmprints/diff-palm-generated-5k",
+    "realpalm": "/home/pai-ng/Jamal/palmprint_roi",
 }
-UNLABELED_DATASETS = ("synthpalm",)       # training only, never a test set
+UNLABELED_DATASETS = ("synthpalm", "realpalm")   # training only, never a test set
 # default test list = every LABELED dataset not used for training
 ALL_DATASETS = tuple(k for k in DATASET_ROOTS if k not in UNLABELED_DATASETS)
 
@@ -912,6 +915,30 @@ def scan_synthpalm(data_root):
                     "unlabeled": True,
                 })
     print(f"  [synth-palm] {len(samples)} unlabeled images from {data_root}")
+    return samples
+
+
+def scan_realpalm(data_root):
+    """real-palm: UNLABELED real palmprint ROIs (GDPS_ROI, GDPS_RGB_ROI -> .bmp;
+       11k_hands_palm_ROI, Human_Palm_Image_ROI -> .jpg). All subfolders (any depth)
+       are merged into ONE set; no labels -> every image gets a unique pseudo-identity
+       'REAL_<i>' and "unlabeled": True. TRAINING ONLY (see UNLABELED_DATASETS)."""
+    IMG_EXTS = (".jpg", ".jpeg", ".png", ".bmp")
+    samples, per_dir = [], {}
+    for root, _, files in sorted(os.walk(data_root)):
+        for fname in sorted(files):
+            if fname.lower().endswith(IMG_EXTS):
+                samples.append({
+                    "path": os.path.join(root, fname),
+                    "identity": f"REAL_{len(samples)}",
+                    "spectrum": "real",
+                    "unlabeled": True,
+                })
+                top = os.path.relpath(root, data_root).split(os.sep)[0]
+                per_dir[top] = per_dir.get(top, 0) + 1
+    print(f"  [real-palm] {len(samples)} unlabeled images from {data_root}")
+    for k in sorted(per_dir):
+        print(f"      {k}: {per_dir[k]}")
     return samples
 
 def scan_cifar10(n_images=2000, root="./cifar_cache", seed=42):
