@@ -72,7 +72,7 @@ class MultiCropDataset(CASIADataset):
     def __getitem__(self, idx):
         s = self.samples[idx % len(self.samples)]
         crops = self.transform(Image.open(s["path"]).convert("RGB"))
-        return crops, self.id_map[s["identity"]]
+        return crops, (-1 if s.get("unlabeled") else self.id_map[s["identity"]])
 
 
 def multicrop_collate(batch):
