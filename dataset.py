@@ -595,7 +595,12 @@ def build_datasets_cross_dataset(cfg):
                               num_workers=cfg.num_workers, drop_last=True,
                               pin_memory=True)
 
-    eval_dict = {"seen_dom_seen_id": _eval_entry_from_samples(cfg, labeled_samples)}
+    if labeled_samples:
+        eval_dict = {"seen_dom_seen_id": _eval_entry_from_samples(cfg, labeled_samples)}
+    else:
+        eval_dict = {}
+        print("  [cross_dataset] no labeled training data -> no 'seen' eval during training; "
+              "model selection = LAST epoch; only the end-of-training test datasets are evaluated")
     return train_loader, eval_dict, train_id_map, n_train_ids, train_id_map
 
 
