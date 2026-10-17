@@ -95,5 +95,5 @@ class PairedCASIADataset(CASIADataset):
         img = Image.open(s["path"]).convert("RGB")
         view1 = self.transform(img)
         view2 = self.transform_prime(img)
-        label = self.id_map[s["identity"]]
+        label = -1 if s.get("unlabeled") else self.id_map[s["identity"]]
         return view1, view2, label
