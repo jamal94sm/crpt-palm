@@ -76,7 +76,7 @@ class BestTracker:
 
     def update(self, eval_results, eval_entry, module):
         """Call right after eval_history.append(...)."""
-        if self.select != "best":
+        if self.select != "best" or not eval_results:
             return
         s = self._score(eval_results)
         if self.score is None or s > self.score:
@@ -101,6 +101,8 @@ class BestTracker:
 
     def selected_text(self, entry):
         """Small table of the chosen epoch (written to the output text file)."""
+        if not any(isinstance(v, dict) and "rank1" in v for v in entry.values()):
+            return "  (no training-set eval sets: unlabeled-only training; model = LAST epoch)"
         lines = [f"  {'eval set':<24} {'R1':>8} {'EER':>8}"]
         for k, v in entry.items():
             if isinstance(v, dict) and "rank1" in v:
