@@ -493,10 +493,11 @@ def resolve_cross_dataset_args(cfg):
     if any(k in UNLABELED_DATASETS for k in test):
         raise SystemExit(f"cross_dataset: {list(UNLABELED_DATASETS)} are unlabeled "
                          f"-> training only, cannot be in --test_datasets")
+        '''
     if all(k in UNLABELED_DATASETS for k in train):
         raise SystemExit("cross_dataset: add at least one LABELED dataset to "
                          "--train_datasets (needed for the 'seen' eval / best-epoch choice)")
-        
+        '''
     both = sorted(set(train) & set(test))
     if both and not getattr(cfg, "_overlap_announced", False):
         cfg._overlap_announced = True                   # resolve is called more than once
