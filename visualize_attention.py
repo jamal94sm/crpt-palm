@@ -312,7 +312,7 @@ def main():
     r0 = 0
     if not a.no_image_row:
         for i, p in enumerate(paths):
-            ax[0, i].imshow(disp[i]); ax[0, i].set_title(os.path.basename(p)[:22], fontsize=7); ax[0, i].axis("off")
+            ax[0, i].imshow(disp[i]); ax[0, i].axis("off")
         ax[0, 0].text(-0.05, 0.5, "Image", transform=ax[0, 0].transAxes, rotation=90, va="center", ha="right",
                       fontsize=11, fontweight="bold")
         r0 = 1
@@ -325,10 +325,8 @@ def main():
             ax[r, i].axis("off")
         ax[r, 0].text(-0.05, 0.5, lab, transform=ax[r, 0].transAxes, rotation=90, va="center", ha="right",
                       fontsize=11, fontweight="bold")
-    what = ("last encoder layer, averaged over heads and queries (attention received)" if a.map == "last"
-            else "attention rollout over all layers")
-    fig.suptitle(f"Attention maps - {what}   [each map min-max normalised]", fontsize=9)
-    fig.subplots_adjust(left=0.07, right=0.90, top=0.92 if a.show_entropy else 0.94, bottom=0.02,
+
+    fig.subplots_adjust(left=0.07, right=0.90, top=0.98, bottom=0.02,
                         wspace=0.03, hspace=0.05 if not a.show_entropy else 0.18)
     cax = fig.add_axes([0.92, 0.2, 0.014, 0.6])
     sm = plt.cm.ScalarMappable(cmap=a.cmap, norm=plt.Normalize(0, 1))
