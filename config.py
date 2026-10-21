@@ -206,7 +206,7 @@ def get_cfg(args=None):
                    help="1 = apply domain-shift corruption to the JEPA context "
                         "view during training; 0 = standard JEPA (no corruption).")
     p.add_argument("--corruption_prob", type=float, default=0.5)
-    p.add_argument("--corruption_mode", default="single", choices=["single", "mixed"])
+    p.add_argument("--corruption_mode", default="mixed", choices=["single", "mixed"])
     p.add_argument("--mix_prob", type=float, default=0.4)
     p.add_argument("--color_temp_strength", type=float, default=0.1)
     p.add_argument("--gamma_strength", type=float, default=0.3)
