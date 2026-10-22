@@ -203,8 +203,10 @@ class DMTPredictor(_nn.Module):
     single pooled vector with no spatial index of its own).
     """
 
-    def __init__(self, num_patches, embed_dim, context_agg_head, norm_struct_out=True):
+    def __init__(self, num_patches, embed_dim, context_agg_head, norm_struct_out=True,
+                 use_structure=False):
         super().__init__()
+        self.use_structure = use_structure
         pred_dim = 128
         depth = 6
         num_heads = 2
@@ -213,6 +215,13 @@ class DMTPredictor(_nn.Module):
         self.ctx_in_proj = _nn.Linear(embed_dim, pred_dim)   # projects s_x^LAT (B, D) -> (B, pred_dim)
         self.mask_token = _nn.Parameter(torch.zeros(1, 1, pred_dim))
         self.out_proj = _nn.Linear(pred_dim, embed_dim)
+
+        if use_structure:     # shared trunk + structure task token (same design as models.Predictor)
+            self.task_embed = _nn.Parameter(torch.zeros(2, 1, 1, pred_dim))
+            _nn.init.trunc_normal_(self.task_embed, std=0.02)
+            self.out_proj_struct = (
+                _nn.Sequential(_nn.Linear(pred_dim, embed_dim), _nn.LayerNorm(embed_dim))
+                if norm_struct_out else _nn.Linear(pred_dim, embed_dim))
 
         pos = get_2d_sincos_pos_embed_(pred_dim, num_patches)
         self.pos_embed = _nn.Parameter(torch.tensor(pos).float().unsqueeze(0), requires_grad=False)
@@ -223,8 +232,11 @@ class DMTPredictor(_nn.Module):
         self.encoder = torch.nn.TransformerEncoder(enc, depth)
         self.norm = _nn.LayerNorm(pred_dim)
 
-    def forward(self, ctx_embeds, target_masks):
-        """ctx_embeds: (B, N_ctx, D) -- the SAME visible-patch context
+    def forward(self, ctx_embeds, target_masks, predict_structure=False):
+        """predict_structure=True (needs use_structure=True) returns
+        (appearance_list, structure_list): a second task token queries the same
+        target positions in the same pass, as in models.Predictor.
+        ctx_embeds: (B, N_ctx, D) -- the SAME visible-patch context
         embeddings this project's other JEPA baselines already compute
         (context_agg_head pools them internally into s_x^LAT here, this
         is NOT done by the caller). target_masks: list of (B, N_tgt)
@@ -239,16 +251,22 @@ class DMTPredictor(_nn.Module):
         query = ctx_embeds.mean(dim=1, keepdim=True)             # (B, 1, D) -- paper's x_c
         s_x_lat = self.context_agg_head(query, ctx_embeds)        # (B, D) -- paper's s_x^LAT, GRADIENT FLOWS THROUGH
         ctx_tok = self.ctx_in_proj(s_x_lat).unsqueeze(1)          # (B, 1, pred_dim)
-
-        preds = []
+        
+        preds, structs = [], []
         for m in target_masks:
             N_tgt = m.size(1)
             pos_tgt = _gather(self.pos_embed.expand(B, -1, -1), m)   # (B, N_tgt, pred_dim)
             mask_tok = self.mask_token.expand(B, N_tgt, -1) + pos_tgt
-            x = torch.cat([ctx_tok, mask_tok], dim=1)                 # (B, 1+N_tgt, pred_dim)
-            x = self.norm(self.encoder(x))
-            preds.append(self.out_proj(x[:, 1:]))                     # (B, N_tgt, D) -- drop the ctx token
-        return preds
+            if predict_structure:
+                x = torch.cat([ctx_tok, mask_tok + self.task_embed[0], mask_tok + self.task_embed[1]], dim=1)
+                x = self.norm(self.encoder(x))
+                preds.append(self.out_proj(x[:, 1:1 + N_tgt]))
+                structs.append(self.out_proj_struct(x[:, 1 + N_tgt:]))
+            else:
+                x = torch.cat([ctx_tok, mask_tok], dim=1)             # (B, 1+N_tgt, pred_dim)
+                x = self.norm(self.encoder(x))
+                preds.append(self.out_proj(x[:, 1:]))                 # (B, N_tgt, D) -- drop the ctx token
+        return (preds, structs) if predict_structure else preds
 
 
 def get_2d_sincos_pos_embed_(embed_dim, grid_size):
