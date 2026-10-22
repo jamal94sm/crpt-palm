@@ -153,9 +153,9 @@ def _shared_flags(cfg):
         if val is None:
             continue
         flags += [f"--{name}", str(val)]
-    if getattr(cfg, "probe_ratios", None):
-        flags.append("--probe_ratios")
-        flags += [str(r) for r in cfg.probe_ratios]
+    if getattr(cfg, "adapt_ratios", None):
+        flags.append("--adapt_ratios")
+        flags += [str(r) for r in cfg.adapt_ratios]
     if getattr(cfg, "train_spectrums", None):
         flags.append("--train_spectrums")
         flags += [str(s) for s in cfg.train_spectrums]

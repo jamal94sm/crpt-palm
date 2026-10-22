@@ -122,25 +122,25 @@ def get_cfg(args=None):
     p.add_argument("--n_runs", type=int, default=3)
     p.add_argument("--ci_level", type=float, default=0.95)
     p.add_argument("--output_name", type=str, default=None)
-    # ─── Linear-probe adaptation for cross-dataset eval (frozen encoder + 2-layer probe) ───
-    p.add_argument("--probe_ratios", type=float, nargs="*", default=[],
+    # ─── Linear adaptation for cross-dataset eval (frozen encoder + 2-layer adapter) ───
+    p.add_argument("--adapt_ratios", type=float, nargs="*", default=[],
         help="cross_dataset mode: besides the zero-shot test (--gallery_ratio), also run the "
-             "adaptation setting(s) for each k in this list, e.g. --probe_ratios 0.1 0.8. "
+             "adaptation setting(s) for each k in this list, e.g. --adapt_ratios 0.1 0.8. "
              "Result names: cross_<ds>_enr<k%%> / cross_<ds>_dis<k%%>. Empty = zero-shot only.")
-    p.add_argument("--probe_id_mode", default="enrolled", choices=["enrolled", "disjoint"],
-        help="enrolled: k%% of EACH identity's samples adapt the probe, the rest form gallery/probe "
-             "(same identities). disjoint: k%% of the IDENTITIES adapt the probe; gallery/probe use "
+    p.add_argument("--adapt_id_mode", default="enrolled", choices=["enrolled", "disjoint"],
+        help="enrolled: k%% of EACH identity's samples train the adapter, the rest form gallery/probe "
+             "(same identities). disjoint: k%% of the IDENTITIES train the adapter; gallery/probe use "
              "only the other identities (pure domain adaptation, no identity leakage).")
-    p.add_argument("--probe_gallery_ratio", type=float, default=0.5,
+    p.add_argument("--adapt_gallery_ratio", type=float, default=0.5,
         help="gallery fraction of the samples left after adaptation (separate from --gallery_ratio, "
              "which is used by the zero-shot test).")
-    p.add_argument("--probe_dim", type=int, default=0,
-        help="output size d of the probe's projection layer; 0 = same as the feature dim "
+    p.add_argument("--adapt_dim", type=int, default=0,
+        help="output size d of the adapter's projection layer; 0 = same as the feature dim "
              "(identity-initialised, so training starts from the zero-shot embedding).")
-    p.add_argument("--probe_epochs", type=int, default=100)
-    p.add_argument("--probe_lr", type=float, default=1e-3)
-    p.add_argument("--probe_wd", type=float, default=1e-4)
-    p.add_argument("--probe_batch_size", type=int, default=128)
+    p.add_argument("--adapt_epochs", type=int, default=100)
+    p.add_argument("--adapt_lr", type=float, default=1e-3)
+    p.add_argument("--adapt_wd", type=float, default=1e-4)
+    p.add_argument("--adapt_batch_size", type=int, default=128)
     p.add_argument("--use_cross_dataset_eval", type=int, default=0, choices=[0, 1])
     p.add_argument("--casia_dir", type=str, default=None)
     p.add_argument("--xjtu_dir", type=str, default=None)
