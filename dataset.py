@@ -380,6 +380,58 @@ def build_cross_dataset_eval(cfg, other_key, other_data_dir):
     }
 
 
+def _probe_entry_from_samples(cfg, samples, k):
+    """Linear-probe setting for one test dataset. Returns an eval_dict entry like the
+    zero-shot one, plus an 'adapt_loader' (labelled samples that train the probe).
+    --probe_id_mode enrolled : k of EACH identity's samples -> adaptation (at least 1, and
+                               always >= 2 samples per identity left for gallery+probe).
+    --probe_id_mode disjoint : k of the IDENTITIES -> adaptation (all their samples);
+                               gallery/probe use only the other identities.
+    The samples that are left are split with --probe_gallery_ratio / --seed. Adaptation
+    samples are never used as gallery or probe."""
+    mode = getattr(cfg, "probe_id_mode", "enrolled")
+    rng = random.Random(int(cfg.seed) * 1000 + int(round(k * 1000)))
+    id_map = build_id_map(samples)
+    by_id = {}
+    for s in samples:
+        by_id.setdefault(s["identity"], []).append(s)
+    ids = sorted(by_id)
+    adapt, rest = [], []
+    if mode == "enrolled":
+        for ident in ids:
+            ss = list(by_id[ident]); rng.shuffle(ss)
+            n_ad = min(max(1, int(round(k * len(ss)))), max(len(ss) - 2, 0))
+            adapt += ss[:n_ad]; rest += ss[n_ad:]
+    else:
+        if len(ids) < 4:
+            raise SystemExit(f"--probe_id_mode disjoint needs >= 4 identities, got {len(ids)}")
+        shuffled = list(ids); rng.shuffle(shuffled)
+        n_ad_ids = min(max(2, int(round(k * len(ids)))), len(ids) - 2)
+        ad_ids = set(shuffled[:n_ad_ids])
+        for ident in ids:
+            (adapt if ident in ad_ids else rest).extend(by_id[ident])
+    n_ad_ids_eff = len(set(s["identity"] for s in adapt))
+    if n_ad_ids_eff < 2:
+        raise SystemExit(f"probe k={k}: only {n_ad_ids_eff} identity with adaptation samples "
+                         f"(need >= 2). Increase --probe_ratios or check samples per identity.")
+    gal_samples, prb_samples = split_gallery_probe(
+        rest, id_map, cfg.probe_gallery_ratio, cfg.seed)
+    mk = lambda ss, sh=False: DataLoader(
+        CASIADataset(ss, id_map, cfg.img_size, augment=False),
+        batch_size=cfg.batch_size, shuffle=sh, num_workers=cfg.num_workers)
+    return {
+        "adapt_loader": mk(adapt),
+        "gallery_loader": mk(gal_samples),
+        "probe_loader": mk(prb_samples),
+        "n_samples": len(samples),
+        "n_ids": len(ids),
+        "n_adapt": len(adapt),
+        "n_adapt_ids": n_ad_ids_eff,
+        "n_gallery": len(gal_samples),
+        "n_probe": len(prb_samples),
+    }
+
+
 def build_cross_dataset_eval_dict(cfg):
     """{"cross_xjtu": {...}, "cross_xpalm": {...}} -- one entry per OTHER
     dataset (not the training one) that has its root dir configured via
@@ -402,6 +454,15 @@ def build_cross_dataset_eval_dict(cfg):
             out[f"cross_{key}"] = _eval_entry_from_samples(cfg, samples)
             print(f"      '{key}': {out[f'cross_{key}']['n_samples']} samples, "
                   f"{out[f'cross_{key}']['n_ids']} IDs{note}")
+            tag = "enr" if getattr(cfg, "probe_id_mode", "enrolled") == "enrolled" else "dis"
+            for k in (getattr(cfg, "probe_ratios", None) or []):
+                pname = f"cross_{key}_{tag}{int(round(k * 100))}"
+                out[pname] = _probe_entry_from_samples(cfg, samples, k)
+                e = out[pname]
+                print(f"      {pname}: adapt {e['n_adapt']} samples / {e['n_adapt_ids']} IDs | "
+                      f"gallery {e['n_gallery']} | probe {e['n_probe']}  "
+                      f"(mode={getattr(cfg, 'probe_id_mode', 'enrolled')}, "
+                      f"probe_gallery_ratio={cfg.probe_gallery_ratio})")
         return out
     own_key = normalize_dataset_key(cfg.data_dir)
     dir_by_key = {"casiams": getattr(cfg, "casia_dir", None),

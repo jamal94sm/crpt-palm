@@ -66,8 +66,44 @@ def evaluate_rank1_eer(gallery_feats, gallery_labels,
     }
 
 
+def train_linear_probe(feats, labels, cfg):
+    """Two-layer probe on FROZEN (L2-normalised) features:
+         projection W: D -> d   (kept; its output is the new embedding)
+         head       C: d -> n_adapt_ids  (used only for the softmax loss, then discarded)
+    W is identity-initialised when d == D, so training starts from the zero-shot embedding.
+    Hyper-parameters (--probe_*) are identical for every method and are never tuned on the test data."""
+    D = feats.size(1)
+    d = int(getattr(cfg, "probe_dim", 0) or D)
+    uniq, y = torch.unique(labels, return_inverse=True)
+    if len(uniq) < 2:
+        raise SystemExit("linear probe needs >= 2 identities in the adaptation set")
+    g = torch.Generator().manual_seed(int(getattr(cfg, "seed", 0)))
+    W = nn.Linear(D, d, bias=False)
+    C = nn.Linear(d, len(uniq))
+    if d == D:
+        with torch.no_grad():
+            W.weight.copy_(torch.eye(D))
+    opt = torch.optim.AdamW(list(W.parameters()) + list(C.parameters()),
+                            lr=float(getattr(cfg, "probe_lr", 1e-3)),
+                            weight_decay=float(getattr(cfg, "probe_wd", 1e-4)))
+    bs = int(getattr(cfg, "probe_batch_size", 128))
+    n = feats.size(0)
+    for _ in range(int(getattr(cfg, "probe_epochs", 100))):
+        perm = torch.randperm(n, generator=g)
+        for i in range(0, n, bs):
+            idx = perm[i:i + bs]
+            loss = F.cross_entropy(C(W(feats[idx])), y[idx])
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+    W.eval()
+    return W
+
+
 def run_full_eval(feature_extractor, eval_dict, cfg, tag=""):
-    """Run Rank-1 + EER on each eval set."""
+    """Run Rank-1 + EER on each eval set. An entry that carries an 'adapt_loader'
+    (built by dataset._probe_entry_from_samples) is evaluated with a linear probe:
+    features -> probe projection W (trained on the adaptation samples) -> matching."""
     device = cfg.device
     results = {}
 
@@ -76,6 +112,15 @@ def run_full_eval(feature_extractor, eval_dict, cfg, tag=""):
             feature_extractor, ev["gallery_loader"], device)
         prb_feats, prb_labels = extract_features(
             feature_extractor, ev["probe_loader"], device)
+        n_adapt = 0
+        if ev.get("adapt_loader") is not None:
+            ad_feats, ad_labels = extract_features(
+                feature_extractor, ev["adapt_loader"], device)
+            n_adapt = len(ad_labels)
+            probe = train_linear_probe(ad_feats, ad_labels, cfg)
+            with torch.no_grad():
+                gal_feats = F.normalize(probe(gal_feats), dim=-1)
+                prb_feats = F.normalize(probe(prb_feats), dim=-1)
         ver = evaluate_rank1_eer(gal_feats, gal_labels,
                                  prb_feats, prb_labels)
 
@@ -85,8 +130,9 @@ def run_full_eval(feature_extractor, eval_dict, cfg, tag=""):
             "n_gallery": ver["n_gallery"],
             "n_probe": ver["n_probe"],
         }
+        extra = f" Adapt={n_adapt}" if n_adapt else ""
         print(f"      {tag}{name}: R1={ver['rank1']:.2f}% | "
               f"EER={ver['eer']:.2f}% | "
-              f"Gal={ver['n_gallery']} Prb={ver['n_probe']}")
+              f"Gal={ver['n_gallery']} Prb={ver['n_probe']}{extra}")
 
     return results

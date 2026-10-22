@@ -153,6 +153,9 @@ def _shared_flags(cfg):
         if val is None:
             continue
         flags += [f"--{name}", str(val)]
+    if getattr(cfg, "probe_ratios", None):
+        flags.append("--probe_ratios")
+        flags += [str(r) for r in cfg.probe_ratios]
     if getattr(cfg, "train_spectrums", None):
         flags.append("--train_spectrums")
         flags += [str(s) for s in cfg.train_spectrums]
@@ -296,14 +299,14 @@ def _build_combined_table(results):
     cols = [(name, metric) for name in ordered_names for metric in ("eer", "rank1")]
 
     header = f"{'Method':<24}" + "".join(
-        f"{name[:14]}_{metric}".rjust(20) for name, metric in cols)
+        f"{name[:24]}_{metric}".rjust(30) for name, metric in cols)
     lines = [header, "-" * len(header)]
     for name, r in results.items():
         row = f"{name:<24}"
         for col_name, metric in cols:
             key = f"{col_name}__{metric}"
             cell = f"{r[key]['mean']:.2f} \u00b1 {r[key]['std']:.2f}" if key in r else "---"
-            row += cell.rjust(20)
+            row += cell.rjust(30)
         lines.append(row)
     return "\n".join(lines) + "\n"
 
