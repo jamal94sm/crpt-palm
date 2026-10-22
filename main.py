@@ -283,7 +283,9 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             p.requires_grad = False
         predictor = DMTPredictor(
             cfg.num_patches, cfg.embed_dim,
-            context_agg_head=context_agg_head).to(cfg.device)
+            context_agg_head=context_agg_head,
+            norm_struct_out=bool(cfg.norm_struct_out),
+            use_structure=(use_a2 and use_shared_predictor_trunk)).to(cfg.device)
         print(f"  DMT-JEPA: window={cfg.dmtjepa_window} k={cfg.dmtjepa_k} "
               f"(faithful architecture -- context_agg_head trains via the "
               f"main loss only, no auxiliary term)")
@@ -297,7 +299,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
     print(f"  Predictor trunk mode: "
           f"{'SHARED (A2 via 2nd task token)' if use_shared_predictor_trunk else 'SEPARATE'}")
-    if use_a2 and not use_shared_predictor_trunk and not use_dmtjepa:
+    if use_a2 and not use_shared_predictor_trunk:
         predictor_structure = StructurePredictor(
             cfg.num_patches, cfg.embed_dim,
             norm_struct_out=bool(cfg.norm_struct_out)).to(cfg.device)
@@ -578,7 +580,15 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             # SA-JEPA-only, via the shared Predictor class).
             struct_hidden = None
             if use_dmtjepa:
-                preds_list = predictor(ctx_embeds, tgt_masks)               # list of (B, N_tgt, D)
+                if use_a2 and use_shared_predictor_trunk:
+                    preds_list, struct_list = predictor(ctx_embeds, tgt_masks, predict_structure=True)
+                    struct_hidden = torch.cat(
+                        [repeat_interleave_batch(s, B, repeat=len(ctx_masks))
+                         for s in struct_list], dim=0)
+                else:
+                    preds_list = predictor(ctx_embeds, tgt_masks)           # list of (B, N_tgt, D)
+                    if use_a2:      # separate trunk: StructurePredictor
+                        struct_hidden = predictor_structure(ctx_embeds, ctx_masks, tgt_masks)
                 pred_embeds = torch.cat(
                     [repeat_interleave_batch(p, B, repeat=len(ctx_masks))
                      for p in preds_list], dim=0)
