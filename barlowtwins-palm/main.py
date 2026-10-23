@@ -26,7 +26,7 @@ from paired_dataset import PairedCASIADataset
 from models import Encoder, Expander, FeatureExtractor
 from barlow_loss import barlow_loss, BarlowBN
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
 
 
 def set_seed(seed):
@@ -234,6 +234,12 @@ def train_barlowtwins(cfg, train_loader, eval_dict, out_path):
         return lr
 
     feature_extractor = FeatureExtractor(encoder)
+    # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
+    _ev = eval_from_ckpt(cfg, "barlowtwins", encoder, feature_extractor, build_cross_dataset_eval_dict,
+                         run_full_eval, out_path)
+    if _ev is not None:
+        return _ev
+
 
     print(f"\n{'─'*70}\n Training Barlow Twins ({total_steps} steps)\n{'─'*70}")
 

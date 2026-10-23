@@ -25,7 +25,7 @@ from paired_dataset import PairedCASIADataset
 from models import Encoder, Expander, Predictor, FeatureExtractor, update_ema
 from byol_loss import byol_loss
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
 
 def exclude_bias_and_norm(p):
     """Official filter (facebookresearch/vicreg, structurally identical to
@@ -243,6 +243,12 @@ def train_byol(cfg, train_loader, eval_dict, out_path):
         return cfg.ema_end - (cfg.ema_end - cfg.ema_start) * (math.cos(math.pi * progress) + 1) / 2
 
     feature_extractor = FeatureExtractor(online_encoder)
+    # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
+    _ev = eval_from_ckpt(cfg, "byol", online_encoder, feature_extractor, build_cross_dataset_eval_dict,
+                         run_full_eval, out_path)
+    if _ev is not None:
+        return _ev
+
 
     print(f"\n{'─'*70}\n Training BYOL ({total_steps} steps)\n{'─'*70}")
 

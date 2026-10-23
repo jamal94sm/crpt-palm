@@ -28,7 +28,7 @@ from models import DinoViT, DINOHead, FeatureExtractor
 from dino_loss import DINOLoss
 from multicrop_dataset import MultiCropDataset, multicrop_collate
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
 
 def set_seed(seed):
     random.seed(seed)
@@ -211,6 +211,12 @@ def train_dino(cfg, train_loader, eval_dict, out_path):
     momentum_schedule = cosine_scheduler(cfg.momentum_teacher, 1.0, cfg.epochs, niter_per_ep)
 
     feature_extractor = FeatureExtractor(student_backbone, use_cls=bool(cfg.eval_use_cls))
+    # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
+    _ev = eval_from_ckpt(cfg, "dino", student_backbone, feature_extractor, build_cross_dataset_eval_dict,
+                         run_full_eval, out_path)
+    if _ev is not None:
+        return _ev
+
 
     print(f"\n{'─'*70}\n Training DINO ({cfg.epochs * niter_per_ep} steps)\n{'─'*70}")
 

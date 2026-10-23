@@ -34,7 +34,7 @@ from models import CapiEncoderDecoder, FeatureExtractor
 from rope_sk import OnlineClustering, L2NormLinear
 from masking import collate_capi_masks
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
 
 def set_seed(seed):
     random.seed(seed)
@@ -205,6 +205,12 @@ def train_capi(cfg, train_loader, eval_dict, out_path):
                             lr=0.0, betas=(cfg.adamw_beta1, cfg.adamw_beta2), weight_decay=0.0)
     clustering_opt = torch.optim.AdamW(teacher_head.parameters(), lr=0.0, betas=(0.9, 0.999))
     feature_extractor = FeatureExtractor(teacher_backbone)
+    # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
+    _ev = eval_from_ckpt(cfg, "capi", teacher_backbone, feature_extractor, build_cross_dataset_eval_dict,
+                         run_full_eval, out_path)
+    if _ev is not None:
+        return _ev
+
 
     print(f"\n{'─'*70}\n Training CAPI ({total} steps)\n{'─'*70}")
     eval_history = []

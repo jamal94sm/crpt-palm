@@ -27,7 +27,7 @@ from models import MaskedViT, MaskFeatHead, FeatureExtractor
 from hog import HOGGenerator
 from masking import batch_block_mask
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
 
 def set_seed(seed):
     random.seed(seed)
@@ -180,6 +180,12 @@ def train_maskfeat(cfg, train_loader, eval_dict, out_path):
         return lr
 
     feature_extractor = FeatureExtractor(encoder)
+    # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
+    _ev = eval_from_ckpt(cfg, "maskfeat", encoder, feature_extractor, build_cross_dataset_eval_dict,
+                         run_full_eval, out_path)
+    if _ev is not None:
+        return _ev
+
 
     print(f"\n{'─'*70}\n Training MaskFeat ({total_steps} steps)\n{'─'*70}")
 

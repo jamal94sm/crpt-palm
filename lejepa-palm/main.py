@@ -25,7 +25,7 @@ from models import LeJepaEncoder, FeatureExtractor
 from sigreg_loss import SIGReg, lejepa_prediction_loss
 from multicrop_dataset import MultiCropDataset, multicrop_collate
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
 
 # ══════════════════ ecosystem plumbing (same as every other baseline) ══════════════════
 def set_seed(seed):
@@ -164,6 +164,12 @@ def train_lejepa(cfg, train_loader, eval_dict, out_path):
     opt = torch.optim.AdamW(encoder.parameters(), lr=cfg.base_lr, weight_decay=cfg.weight_decay,
                             betas=(cfg.adamw_beta1, cfg.adamw_beta2))
     feature_extractor = FeatureExtractor(encoder)
+    # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
+    _ev = eval_from_ckpt(cfg, "lejepa", encoder, feature_extractor, build_cross_dataset_eval_dict,
+                         run_full_eval, out_path)
+    if _ev is not None:
+        return _ev
+
 
     print(f"\n{'─'*70}\n Training LeJEPA ({total} steps)\n{'─'*70}")
     eval_history = []

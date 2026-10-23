@@ -27,7 +27,7 @@ from dino_losses import DINOLoss, iBOTPatchLoss, KoLeoLoss
 from masking import make_mask_generator, build_ibot_masks
 from multicrop_dataset import MultiCropDataset, multicrop_collate
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
 
 # ══════════════════ ecosystem plumbing (same as the other baselines) ══════════════════
 def set_seed(seed):
@@ -237,6 +237,12 @@ def train_dinov2(cfg, train_loader, eval_dict, out_path):
     opt = torch.optim.AdamW(build_param_groups(student, cfg.layerwise_decay, cfg.patch_embed_lr_mult),
                             lr=0.0, betas=(cfg.adamw_beta1, cfg.adamw_beta2), weight_decay=0.0)
     feature_extractor = FeatureExtractor(teacher["backbone"], use_cls=bool(cfg.eval_use_cls))
+    # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
+    _ev = eval_from_ckpt(cfg, "dinov2", teacher["backbone"], feature_extractor, build_cross_dataset_eval_dict,
+                         run_full_eval, out_path)
+    if _ev is not None:
+        return _ev
+
 
     print(f"\n{'─'*70}\n Training DINOv2 ({total} steps)\n{'─'*70}")
     eval_history = []

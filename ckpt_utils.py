@@ -57,6 +57,82 @@ def _opt(cfg, name, env, default=None):
     return v if v is not None else (os.environ.get(env) or default)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Evaluate a SAVED backbone (no training): --eval_ckpt_dir
+# ─────────────────────────────────────────────────────────────────────────────
+def find_eval_ckpt(cfg, default_tag):
+    """Path of the saved backbone to evaluate, or None when --eval_ckpt_dir is not set.
+    --eval_ckpt_dir (env EVAL_CKPT_DIR) is a FILE or a DIRECTORY holding ckpt_{tag}_train_{label}.pth
+    (the files written by --save_ckpt). tag = $CKPT_KEY (BASELINE_SPECS key) or default_tag.
+    --eval_ckpt_label (env EVAL_CKPT_LABEL) picks the train label when a directory holds several."""
+    import glob
+    src = _opt(cfg, "eval_ckpt_dir", "EVAL_CKPT_DIR")
+    if not src:
+        return None
+    src = os.path.expanduser(src)
+    if os.path.isfile(src):
+        return src
+    tag = os.environ.get("CKPT_KEY") or default_tag
+    label = _opt(cfg, "eval_ckpt_label", "EVAL_CKPT_LABEL")
+    hits = sorted(p for p in glob.glob(os.path.join(src, f"ckpt_{tag}_train_*.pth"))
+                  if not p.endswith("_resume.pth"))
+    if label:
+        hits = [p for p in hits if os.path.basename(p) == f"ckpt_{tag}_train_{label}.pth"]
+    if len(hits) != 1:
+        have = sorted(os.path.basename(p) for p in glob.glob(os.path.join(src, "*.pth")))
+        raise SystemExit(
+            f"--eval_ckpt_dir {src}: expected exactly one ckpt_{tag}_train_{label or '*'}.pth, found "
+            f"{len(hits)}. Files there: {have}. Use --eval_ckpt_label <train label> to choose.")
+    return hits[0]
+
+
+def eval_from_ckpt(cfg, default_tag, module, feature_extractor, build_cross_fn, run_eval_fn,
+                   out_path, skip_prefixes=()):
+    """If --eval_ckpt_dir is set: load the saved weights into `module` (the same module that
+    maybe_save_ckpt saved), run the cross-dataset evaluation (zero-shot + every --adapt_ratios
+    k%) WITHOUT training, append the table to out_path and return a final-entry dict
+    ({mean_rank1, mean_eer, <eval set>: {...}}) shaped like the training functions' result.
+    Returns None when --eval_ckpt_dir is not set (normal training run)."""
+    path = find_eval_ckpt(cfg, default_tag)
+    if path is None:
+        return None
+    sd = torch.load(path, map_location="cpu")
+    if not isinstance(sd, dict) or "modules" in sd:
+        raise SystemExit(f"{path}: expected a plain state_dict (ckpt_*.pth, not *_resume.pth)")
+    if all(k.startswith("module.") for k in sd):
+        sd = {k[7:]: v for k, v in sd.items()}
+    hint = (f"{path} does not match the {default_tag} backbone built from the current config "
+            f"(--embed_dim / --num_patches / depth must equal the training run's)")
+    try:
+        res = module.load_state_dict(sd, strict=False)
+    except RuntimeError as e:
+        raise SystemExit(f"{hint}.\n{e}")
+    missing = [k for k in res.missing_keys if not k.startswith(tuple(skip_prefixes))]
+    if missing or res.unexpected_keys:
+        raise SystemExit(f"{hint}.\n  missing: {missing[:5]}\n  unexpected: {list(res.unexpected_keys)[:5]}")
+    module.eval()
+    print(f"\n{'─'*70}\n Evaluating saved backbone (no training): {path}\n{'─'*70}")
+    cross = build_cross_fn(cfg)
+    if not cross:
+        raise SystemExit("no cross-dataset evaluation sets: set the dataset directories "
+                         "(--casia_dir/--xjtu_dir/--xpalm_dir, or --mode cross_dataset with --test_datasets)")
+    results = run_eval_fn(feature_extractor, cross, cfg, tag="[ckpt-eval] ")
+    lines = [f" {'dataset':<24} {'R1':>8} {'EER':>8}"] + \
+            [f" {n:<24} {r['rank1']:>8.2f} {r['eer']:>8.2f}" for n, r in results.items()]
+    text = "\n".join(lines)
+    print("\n" + text + "\n")
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+    with open(out_path, "a") as f:
+        f.write(f"\nEVALUATION OF SAVED BACKBONE {os.path.abspath(path)} (seed={cfg.seed}, no training)\n"
+                f"{text}\n")
+    import re
+    zs = [r for n, r in results.items() if not re.search(r"_(enr|dis)\d+$", n)] or list(results.values())
+    entry = {"mean_rank1": sum(r["rank1"] for r in zs) / len(zs),       # mean over the zero-shot sets
+             "mean_eer": sum(r["eer"] for r in zs) / len(zs)}
+    entry.update(results)
+    return entry
+
+
 class BestTracker:
     """--ckpt_select last|best, --best_metric eer|r1.
     'best' = epoch with the best mean EER (or R1) over the TRAINING dataset/domain

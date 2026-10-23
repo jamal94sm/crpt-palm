@@ -475,6 +475,10 @@ def run_all_baselines(cfg):
             child_env["SAVE_RESUME"] = str(cfg.save_resume)
         if getattr(cfg, "resume_from", None):
             child_env["RESUME_FROM"] = os.path.abspath(cfg.resume_from)
+        if getattr(cfg, "eval_ckpt_dir", None):
+            child_env["EVAL_CKPT_DIR"] = os.path.abspath(os.path.expanduser(cfg.eval_ckpt_dir))
+        if getattr(cfg, "eval_ckpt_label", None):
+            child_env["EVAL_CKPT_LABEL"] = cfg.eval_ckpt_label
         subprocess.run(cmd, cwd=cwd, check=True, env=child_env)
 
         results[spec["name"]] = _parse_summary_csv(out_file)

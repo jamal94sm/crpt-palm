@@ -65,7 +65,7 @@ from line_masking import line_saliency, ridge_saliency, patchify_line_guided, ta
 #from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, context_consistency_loss
 from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, DMTPredictor
 from ci_utils import run_multi_seed
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
 
 CASIA_MEAN = [0.5, 0.5, 0.5]                    # matches dataset.py's Normalize()
 CASIA_STD  = [0.5, 0.5, 0.5]
@@ -450,6 +450,12 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     print(f"{'─'*70}")
 
     feature_extractor = FeatureExtractor(target_encoder)
+    # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
+    _ev = eval_from_ckpt(cfg, "jepa", target_encoder, feature_extractor, build_cross_dataset_eval_dict,
+                         run_full_eval, out_path)
+    if _ev is not None:
+        return _ev
+
     print("  Evaluation encoder: TARGET (EMA of the context encoder)")
     global_step = 0
     eval_history = []
@@ -994,6 +1000,12 @@ def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
     # run_full_eval needs an object whose forward(x) -> [B, embed_dim];
     # for CompNet that is exactly the backbone (no FeatureExtractor wrapper).
     feature_extractor = model.backbone
+    # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
+    _ev = eval_from_ckpt(cfg, "compnet", model.backbone, feature_extractor, build_cross_dataset_eval_dict,
+                         run_full_eval, out_path)
+    if _ev is not None:
+        return _ev
+
 
     print(f"\n{'─'*70}")
     print(f"  Training CompNet ({total_steps} steps, CE on IDs)")
@@ -1133,6 +1145,12 @@ def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
     # run_full_eval needs an object whose forward(x) -> [B, embed_dim];
     # for the ViT that is model.backbone = FeatureExtractor(encoder).
     feature_extractor = FeatModule(model)
+    # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
+    _ev = eval_from_ckpt(cfg, "vit_sup", model, feature_extractor, build_cross_dataset_eval_dict,
+                         run_full_eval, out_path, skip_prefixes=("classifier.",))
+    if _ev is not None:
+        return _ev
+
 
     print(f"\n{'─'*70}")
     print(f"  Training Supervised ViT ({total_steps} steps, CE on IDs)")

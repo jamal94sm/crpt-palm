@@ -571,6 +571,16 @@ def get_cfg(args=None):
              "DIRECTORY holding one per baseline (--run_all_baselines). --epochs is the "
              "NEW TOTAL number of epochs (saved 100 + 50 more -> --epochs 150).")
 
+    p.add_argument("--eval_ckpt_dir", type=str, default=None,
+        help="EVALUATE saved backbones instead of training: a ckpt_{key}_train_{label}.pth FILE "
+             "(single method) or a DIRECTORY holding one per baseline (--run_all_baselines). "
+             "Runs the cross-dataset evaluation (zero-shot + every --adapt_ratios k%%) with the "
+             "current dataset / --adapt_* arguments; the architecture arguments (--embed_dim, "
+             "--num_patches, ...) must equal those of the training run.")
+    p.add_argument("--eval_ckpt_label", type=str, default=None,
+        help="With --eval_ckpt_dir DIR: train label of the checkpoint to use when several exist "
+             "for a method (e.g. 'xpalm+xjtu').")
+
     # ─── Misc ─────────────────────────────────────────────────
     p.add_argument("--seed", type=int, default=2025)
     p.add_argument("--device", default="cuda")
