@@ -200,7 +200,7 @@ def op_dim(img, rng, s, skin):
 
 
 def op_overexpose(img, rng, s, skin):
-    y = img * (1 + 0.9 * mag(rng, s)) + 0.02
+    y = img * (1 + 0.5 * mag(rng, s)) + 0.01
     return np.clip(np.where(y > 0.8, 0.8 + 0.2 * np.tanh((y - 0.8) / 0.2), y), 0, 1)     # filmic shoulder
 
 
