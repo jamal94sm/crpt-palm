@@ -3,7 +3,8 @@
   device    camera / ISP differences (iPhone vs Huawei ...): color rendering, resolution, sharpening/smoothing,
             local contrast (HDR), sensor noise, JPEG, and a 'device_profile' that chains them with CORRELATED traits
   lighting  exposure, side light, flash glare, cast shadow, colored light, haze / low contrast
-  surface   palm condition: wet, oily/sweaty, dry/flaky, dirt, ballpoint-ink text   (wet + ink adapted from augment.py)
+  surface   palm condition: wet (soft sheen, from augment.py), wet_gloss (glossy glints, from wet_look.py), oily/sweaty,
+            dry/flaky, dirt, ballpoint-ink text (from augment.py)
 
 Every operator is   op(img, rng, severity, skin) -> img      img: float32 (H, W, 3) in [0, 1]
   severity in [0, 1] scales the magnitude; each call draws its own random magnitude (0.5..1) * severity.
@@ -284,6 +285,40 @@ def op_wet(img, rng, s, skin):
     return np.clip(out + detail, 0, 1)
 
 
+def op_wet_gloss(img, rng, s, skin):
+    """Wet-look (port of wet_look.py, numpy only): wet tone + a fake normal map from the image's own brightness +
+    Blinn-Phong specular glints that follow the creases, modulated by an uneven random water film + soft sheen.
+    Stronger and glossier than `wet`; the glints can partly cover palm lines (as real water does)."""
+    H, W = img.shape[:2]
+    sc = W / 627.0                                                # the original parameters were tuned at 627 px
+    k = 0.5 + mag(rng, s)                                         # strength factor, ~1 at the default severity
+    mx, mn = img.max(axis=2), img.min(axis=2)
+    sat = np.where(mx > 1e-6, (mx - mn) / np.maximum(mx, 1e-6), 0.0)
+    new_mx = mx * (1 - 0.12 * k)                                  # darker (wet skin absorbs light)
+    new_mn = new_mx * (1 - np.clip(sat * (1 + 0.35 * k), 0, 1))   # richer colour (HSV saturation x(1+0.35k))
+    t = np.where((mx > mn)[..., None], (mx[..., None] - img) / np.maximum(mx - mn, 1e-6)[..., None], 0.0)
+    base = new_mx[..., None] - t * (new_mx - new_mn)[..., None]
+    base = np.clip((base - 0.5) * (1 + 0.12 * k) + 0.5, 0, 1)
+    base = img + skin[..., None] * (base - img)
+    height = blur(lum(img), 2.0 * sc)                             # brightness as a height map
+    p = np.pad(height, 1, mode="edge")
+    gx = ((p[:-2, 2:] - p[:-2, :-2]) + 2 * (p[1:-1, 2:] - p[1:-1, :-2]) + (p[2:, 2:] - p[2:, :-2])) * sc
+    gy = ((p[2:, :-2] - p[:-2, :-2]) + 2 * (p[2:, 1:-1] - p[:-2, 1:-1]) + (p[2:, 2:] - p[:-2, 2:])) * sc
+    n = np.dstack([-gx * 6.0, -gy * 6.0, np.ones_like(height)])
+    n /= np.linalg.norm(n, axis=2, keepdims=True)
+    L = np.array([-0.45 + rng.uniform(-0.25, 0.25), -0.55 + rng.uniform(-0.25, 0.25), 0.70], np.float32)
+    L /= np.linalg.norm(L)
+    Hv = (L + np.array([0, 0, 1.0], np.float32))
+    Hv /= np.linalg.norm(Hv)
+    ndh = np.clip(n @ Hv, 0, 1)
+    film = blur(rng.random((H, W)).astype(np.float32), 40.0 * sc)  # uneven water layer
+    film = (film - film.min()) / (film.max() - film.min() + 1e-8)
+    spec = ndh ** 60 * (0.5 + film)
+    sheen = blur(ndh ** 8, 12.0 * sc) * film * 0.12 * k
+    out = base + skin[..., None] * (spec * 0.42 * k + sheen)[..., None]
+    return np.clip(out, 0, 1)
+
+
 def op_oily(img, rng, s, skin):
     """Sweaty / oily: broad specular sheen that also washes out the fine line contrast."""
     k = img.shape[1] / 512.0
@@ -392,7 +427,7 @@ OPS = {
                "device_profile": op_device_profile},
     "lighting": {"dim": op_dim, "overexpose": op_overexpose, "side_light": op_side_light, "glare": op_glare,
                  "cast_shadow": op_cast_shadow, "colored_light": op_colored_light, "haze": op_haze},
-    "surface": {"wet": op_wet, "oily": op_oily, "dry": op_dry, "dirt": op_dirt, "ink_text": op_ink_text},
+    "surface": {"wet": op_wet, "wet_gloss": op_wet_gloss, "oily": op_oily, "dry": op_dry, "dirt": op_dirt, "ink_text": op_ink_text},
 }
 
 
@@ -471,7 +506,7 @@ def draw_grid(rows, col_titles, path, dpi, cell=1.6):
 SHIFT_ALIASES = {"poor_lighting": ("lighting", "dim"), "strong_lighting": ("lighting", "overexpose"),
                  "device_change": ("device", "device_profile"), "wet_palm": ("surface", "wet")}
 DEFAULT_SHIFTS = ["poor_lighting", "strong_lighting", "side_light", "glare", "cast_shadow",
-                  "wet", "dry", "device_change"]
+                  "wet", "wet_gloss", "dry", "device_change"]
 
 
 def resolve_shift(name):
