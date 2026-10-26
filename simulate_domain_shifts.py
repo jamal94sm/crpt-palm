@@ -505,6 +505,14 @@ def draw_grid(rows, col_titles, path, dpi, cell=1.6):
 
 SHIFT_ALIASES = {"poor_lighting": ("lighting", "dim"), "strong_lighting": ("lighting", "overexpose"),
                  "device_change": ("device", "device_profile"), "wet_palm": ("surface", "wet")}
+DISPLAY_NAMES = {"poor_lighting": "Low light", "dim": "Low light", "strong_lighting": "Overexposure",
+                 "overexpose": "Overexposure", "device_change": "Device change", "device_profile": "Device change",
+                 "wet": "Wet palm (sheen)", "wet_gloss": "Wet palm (glossy)", "wet_palm": "Wet palm (sheen)",
+                 "side_light": "Side lighting", "glare": "Flash glare", "cast_shadow": "Cast shadow",
+                 "colored_light": "Colored light", "haze": "Low contrast", "oily": "Oily palm", "dry": "Dry palm",
+                 "dirt": "Dirty palm", "ink_text": "Ink on palm", "local_contrast": "HDR / local contrast",
+                 "sensor_noise": "Sensor noise", "jpeg": "JPEG compression", "resolution": "Low resolution",
+                 "detail": "Sharpening / smoothing", "color_cast": "Color cast"}
 DEFAULT_SHIFTS = ["poor_lighting", "strong_lighting", "side_light", "glare", "cast_shadow",
                   "wet", "wet_gloss", "dry", "device_change"]
 
@@ -520,11 +528,14 @@ def resolve_shift(name):
                      f"{[n for d in OPS.values() for n in d]}")
 
 
-def draw_rows(origs, skins, shifts, severity, seed, font, path, dpi, cell=1.5, labels=True):
+def draw_rows(origs, skins, shifts, severity, seed, font, path, dpi, cell=1.5, labels=True, row_labels=None):
     """Row 0 = the original images; every other row = ONE shift applied to the SAME images (columns)."""
     K, R = len(origs), len(shifts) + 1
     fig, ax = plt.subplots(R, K, figsize=(cell * K, cell * R), squeeze=False)
-    names = ["original"] + [n.replace("_", " ") for n in shifts]
+    if row_labels and len(row_labels) != len(shifts):
+        raise SystemExit("--row_labels needs exactly one label per shift")
+    names = ["Original"] + (list(row_labels) if row_labels else [DISPLAY_NAMES.get(n, n.replace("_", " ").capitalize())
+                                                                  for n in shifts])
     for j in range(K):
         ax[0, j].imshow(origs[j])
     for r, name in enumerate(shifts, start=1):
@@ -572,6 +583,8 @@ def main():
                     help="rows layout: shift names, e.g. poor_lighting strong_lighting wet device_change glare ... "
                          f"(aliases {list(SHIFT_ALIASES)} or any operator name). Default: {' '.join(DEFAULT_SHIFTS)}")
     ap.add_argument("--no_labels", action="store_true", help="rows layout: omit the row labels")
+    ap.add_argument("--row_labels", nargs="*", default=None,
+                    help="rows layout: custom row labels (one per shift, quote multi-word labels)")
     ap.add_argument("--list_ops", action="store_true")
     a = ap.parse_args()
     if a.list_ops:
@@ -586,7 +599,7 @@ def main():
 
     if a.layout == "rows" or a.shifts:
         draw_rows(origs, skins, a.shifts or DEFAULT_SHIFTS, a.severity, a.seed, a.font,
-                  os.path.join(a.out_dir, "domain_shift_rows.png"), a.dpi, labels=not a.no_labels)
+                  os.path.join(a.out_dir, "domain_shift_rows.png"), a.dpi, labels=not a.no_labels, row_labels=a.row_labels)
         return
 
     for g in ("device", "lighting", "surface"):
