@@ -522,8 +522,8 @@ def get_cfg(args=None):
     p.add_argument("--adapt_dim", type=int, default=0,
         help="output size d of the adapter's projection layer; 0 = same as the feature dim "
              "(identity-initialised, so training starts from the zero-shot embedding).")
-    p.add_argument("--adapt_epochs", type=int, default=100)
-    p.add_argument("--adapt_lr", type=float, default=1e-3)
+    p.add_argument("--adapt_epochs", type=int, default=300)
+    p.add_argument("--adapt_lr", type=float, default=3e-3)
     p.add_argument("--adapt_wd", type=float, default=1e-4)
     p.add_argument("--adapt_batch_size", type=int, default=128)
     p.add_argument("--use_cross_dataset_eval", type=int, default=0, choices=[0, 1],
