@@ -174,7 +174,37 @@ def ckpt_name(cfg):
 #  Shared warmup-cosine LR schedule
 # ══════════════════════════════════════════════════════════════
 
+def _parse_knots(s):
+    """'0:1e-5,10:1e-3,...' -> sorted [(epoch, value), ...]."""
+    pts = []
+    for tok in str(s).split(","):
+        e, v = tok.split(":")
+        pts.append((float(e), float(v)))
+    pts.sort()
+    if len(pts) < 2 or pts[0][0] != 0:
+        raise SystemExit("--lr_knots / --ema_knots need >= 2 'epoch:value' pairs and must start at epoch 0")
+    return pts
+
+
+def _interp(pts, ep, log=False):
+    """Piecewise interpolation of (epoch, value) knots (log-linear if log=True); last value held."""
+    if ep <= pts[0][0]:
+        return pts[0][1]
+    for (e0, v0), (e1, v1) in zip(pts, pts[1:]):
+        if ep <= e1:
+            t = (ep - e0) / max(1e-9, e1 - e0)
+            if log:
+                return math.exp(math.log(v0) + t * (math.log(v1) - math.log(v0)))
+            return v0 + t * (v1 - v0)
+    return pts[-1][1]
+
+
 def make_scheduler(opt, cfg, total_steps):
+    if getattr(cfg, "lr_knots", None):
+        pts = _parse_knots(cfg.lr_knots)
+        spe = total_steps / max(1, cfg.epochs)                    # steps per epoch
+        return torch.optim.lr_scheduler.LambdaLR(
+            opt, lambda step: _interp(pts, step / spe, log=True) / cfg.learning_rate)
     warmup_steps = int(cfg.warmup_ratio * total_steps)
 
     def lr_lambda(step):
@@ -441,7 +471,12 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     total_steps = cfg.epochs * len(train_loader)
     scheduler = make_scheduler(opt, cfg, total_steps)
 
+    _ema_pts = _parse_knots(cfg.ema_knots) if getattr(cfg, "ema_knots", None) else None
+    _spe = len(train_loader)                                      # steps per epoch
+
     def get_momentum(step):
+        if _ema_pts is not None:
+            return _interp(_ema_pts, step / _spe)
         return cfg.ema_start + (cfg.ema_end - cfg.ema_start) * \
                step / max(1, total_steps)
 

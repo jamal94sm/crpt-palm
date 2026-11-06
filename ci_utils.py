@@ -408,7 +408,12 @@ def run_all_baselines(cfg):
         if spec["script"] == "self":
             trunk_flag = ["--use_shared_predictor_trunk",
                           str(int(getattr(cfg, "use_shared_predictor_trunk", 1)))]
-            cmd = [sys.executable, self_main] + shared + trunk_flag + spec["extra"] + \
+            sched_flags = []
+            for _n in ("lr_knots", "ema_knots", "ema_start", "ema_end"):
+                _v = getattr(cfg, _n, None)
+                if _v is not None:
+                    sched_flags += [f"--{_n}", str(_v)]
+            cmd = [sys.executable, self_main] + shared + trunk_flag + sched_flags + spec["extra"] + \
                   ["--output_name", out_name]
             cwd = here
         elif spec["script"] == "vicreg":

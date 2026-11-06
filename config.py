@@ -220,6 +220,14 @@ def get_cfg(args=None):
     p.add_argument("--final_weight_decay", type=float, default=0.4)
     p.add_argument("--ema_start", type=float, default=0.996)
     p.add_argument("--ema_end", type=float, default=1.0)
+    p.add_argument("--lr_knots", type=str, default=None,
+        help="Piecewise LR schedule, 'epoch:lr' pairs, e.g. '0:1e-5,10:1e-3,40:3e-4,600:1e-6'. "
+             "Interpolated log-linearly between knots; absolute epochs (independent of --epochs, so a "
+             "resumed/extended run continues the same curve); the last value is held after the last knot. "
+             "Must start at epoch 0. Overrides --warmup_ratio/--start_lr/--final_lr. Default: warmup+cosine.")
+    p.add_argument("--ema_knots", type=str, default=None,
+        help="Piecewise EMA-momentum schedule, 'epoch:momentum' pairs (linear interpolation, absolute "
+             "epochs). Overrides --ema_start/--ema_end. Default: linear ema_start -> ema_end over the run.")
 
     # ─── Evaluation ───────────────────────────────────────────
     p.add_argument("--eval_every", type=int, default=10)
