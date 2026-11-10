@@ -562,10 +562,12 @@ def get_cfg(args=None):
              "palmjepa dinov2); case, '-' and '_' are ignored ('palm-jepa' == 'palmjepa'); "
              "'all' = every baseline. Only the first seed of a multi-seed run is saved.")
 
-    p.add_argument("--ckpt_select", type=str, default=None, choices=["last", "best"],
+    p.add_argument("--ckpt_select", type=str, default=None, choices=["last", "best", "both"],
         help="Which model is saved AND reported (within-dataset + cross-dataset): "
              "'last' = final-epoch model (default), 'best' = the epoch that is best "
-             "on the TRAINING dataset/domain eval sets (see --best_metric).")
+             "on the TRAINING dataset/domain eval sets (see --best_metric), "
+             "'both' = report the last epoch but save *_best.pth AND *_last.pth "
+             "(the plain ckpt file = last).")
     p.add_argument("--best_metric", type=str, default=None, choices=["eer", "r1"],
         help="Criterion for --ckpt_select best: lowest mean EER (default) or "
              "highest mean Rank-1, on the training-set eval sets.")
@@ -588,6 +590,9 @@ def get_cfg(args=None):
     p.add_argument("--eval_ckpt_label", type=str, default=None,
         help="With --eval_ckpt_dir DIR: train label of the checkpoint to use when several exist "
              "for a method (e.g. 'xpalm+xjtu').")
+    p.add_argument("--eval_ckpt_which", type=str, default=None, choices=["best", "last"],
+        help="With --eval_ckpt_dir DIR: evaluate the *_best.pth or *_last.pth files written by "
+             "--ckpt_select both (default: the plain ckpt_{key}_train_{label}.pth).")
 
     # ─── Misc ─────────────────────────────────────────────────
     p.add_argument("--seed", type=int, default=2025)

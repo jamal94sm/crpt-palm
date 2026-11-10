@@ -11,6 +11,7 @@ import os
 import torch
 
 _SAVED = set()      # (tag, train label) already saved by THIS process -> in a multi-seed run only the first seed is saved
+_BOTH = {}          # filled by BestTracker.finalize when --ckpt_select both; consumed by maybe_save_ckpt
 
 
 def _norm(s):
@@ -33,6 +34,8 @@ def _train_label(cfg):
 def maybe_save_ckpt(cfg, module, default_tag, skip_prefixes=()):
     """Save module.state_dict() if this baseline is listed in --save_ckpt.
     tag = $CKPT_KEY (the BASELINE_SPECS key, set by ci_utils) or default_tag."""
+    both = dict(_BOTH)          # take (and clear) the best/last snapshots left by finalize()
+    _BOTH.clear()
     wanted = _wanted(cfg)
     if not wanted:
         return None
@@ -49,6 +52,13 @@ def maybe_save_ckpt(cfg, module, default_tag, skip_prefixes=()):
     torch.save(sd, path)
     _SAVED.add((tag, label))
     print(f"  Saved inference checkpoint: {path}  ({len(sd)} tensors, seed {cfg.seed})")
+    for which in ("best", "last"):
+        st = both.get(which)
+        if st is None:
+            continue
+        p = os.path.join(cfg.output_dir, f"ckpt_{tag}_train_{label}_{which}.pth")
+        torch.save({k: v for k, v in st.items() if not k.startswith(tuple(skip_prefixes))}, p)
+        print(f"  Saved {which.upper()} checkpoint (epoch {both.get(which + '_epoch', '?')}): {p}")
     return path
 
 
@@ -74,10 +84,13 @@ def find_eval_ckpt(cfg, default_tag):
         return src
     tag = os.environ.get("CKPT_KEY") or default_tag
     label = _opt(cfg, "eval_ckpt_label", "EVAL_CKPT_LABEL")
-    hits = sorted(p for p in glob.glob(os.path.join(src, f"ckpt_{tag}_train_*.pth"))
-                  if not p.endswith("_resume.pth"))
+    which = _opt(cfg, "eval_ckpt_which", "EVAL_CKPT_WHICH", "")
+    sfx = f"_{which}" if which in ("best", "last") else ""
+    hits = sorted(p for p in glob.glob(os.path.join(src, f"ckpt_{tag}_train_*{sfx}.pth"))
+                  if not p.endswith("_resume.pth")
+                  and (sfx or not p.endswith(("_best.pth", "_last.pth"))))
     if label:
-        hits = [p for p in hits if os.path.basename(p) == f"ckpt_{tag}_train_{label}.pth"]
+        hits = [p for p in hits if os.path.basename(p) == f"ckpt_{tag}_train_{label}{sfx}.pth"]
     if len(hits) != 1:
         have = sorted(os.path.basename(p) for p in glob.glob(os.path.join(src, "*.pth")))
         raise SystemExit(
@@ -152,7 +165,7 @@ class BestTracker:
 
     def update(self, eval_results, eval_entry, module):
         """Call right after eval_history.append(...)."""
-        if self.select != "best" or not eval_results:
+        if self.select not in ("best", "both") or not eval_results:
             return
         s = self._score(eval_results)
         if self.score is None or s > self.score:
@@ -172,6 +185,15 @@ class BestTracker:
         else:
             entry = eval_history[-1]
             self.label = f"LAST epoch = {entry['epoch']}"
+        if self.select == "both":
+            _BOTH.update({
+                "best": self.state,
+                "best_epoch": self.entry["epoch"] if self.entry else None,
+                "last": {k: v.detach().cpu().clone() for k, v in module.state_dict().items()},
+                "last_epoch": eval_history[-1]["epoch"] if eval_history else None})
+            if self.state is not None:
+                print(f"  (--ckpt_select both: best epoch {self.entry['epoch']} by "
+                      f"{self.metric.upper()} will also be saved as *_best.pth)")
         print(f"\n  Model used for saving / cross-dataset eval / reporting: {self.label}")
         return entry
 
