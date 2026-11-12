@@ -50,8 +50,9 @@ from models import ContextEncoder
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".bmp")
 DEFAULT_CKPT_DIR = "out_xd_xpalm_xjtu_to_casia_aug8"
 DEFAULT_IMAGE_DIR = "/home/pai-ng/Jamal/CASIA-MS-ROI"
-DEFAULT_METHODS = ["jepa", "dmtjepa", "palmjepa"]
-DISPLAY_NAME = {"jepa": "JEPA", "dmtjepa": "DMT-JEPA", "palmjepa": "Palm-JEPA"}
+DEFAULT_METHODS = ["jepa", "cjepa", "dmtjepa", "dinov2", "palmjepa"]
+DISPLAY_NAME = {"jepa": "JEPA", "cjepa": "C-JEPA", "dmtjepa": "DMT-JEPA",
+                "dinov2": "DINOv2", "palmjepa": "Palm-JEPA"}
 
 
 # ───────────────────────── checkpoint ─────────────────────────
@@ -106,6 +107,72 @@ def build_model(sd, num_heads=None):
     except RuntimeError as e:
         raise SystemExit(f"Checkpoint does not match the ContextEncoder built from it:\n{e}")
     return model.eval(), a, S
+
+
+# ───────────────────────── DINOv2 backbone (CLS token, blocks.*) ─────────────────────────
+def _dinov2_module():
+    import importlib.util          # load dinov2-palm/models.py under another name: it clashes with models.py
+    for base in (os.path.dirname(os.path.abspath(__file__)), os.getcwd()):
+        p = os.path.join(base, "dinov2-palm", "models.py")
+        if os.path.isfile(p):
+            spec = importlib.util.spec_from_file_location("dinov2_palm_models", p)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    raise SystemExit("dinov2-palm/models.py not found (run from the repo root)")
+
+
+def build_dino(sd, num_heads=None):
+    D, c, ph, pw = sd["patch_embed.weight"].shape
+    P = sd["pos_embed"].shape[1] - 1                       # minus the CLS position
+    g = int(round(math.sqrt(P)))
+    if c != 3 or ph != pw or g * g != P:
+        raise SystemExit(f"Unexpected DINOv2 shapes: patch_embed {tuple(sd['patch_embed.weight'].shape)}, "
+                         f"pos_embed {tuple(sd['pos_embed'].shape)}")
+    depth = len({int(k.split(".")[1]) for k in sd if k.startswith("blocks.")})
+    arch = dict(embed_dim=D, patch=ph, grid=g, depth=depth,
+                mlp_ratio=sd["blocks.0.mlp.fc1.weight"].shape[0] / D)
+    ls = 1e-5 if "blocks.0.ls1.gamma" in sd else 0.0
+    S = ph * g
+    model = _dinov2_module().DinoV2ViT(S, g, D, depth=depth, num_heads=num_heads,
+                                       mlp_ratio=arch["mlp_ratio"], layerscale_init=ls)
+    try:
+        model.load_state_dict(sd, strict=True)
+    except RuntimeError as e:
+        raise SystemExit(f"Checkpoint does not match the DinoV2ViT built from it:\n{e}")
+    return model.eval(), arch, S
+
+
+@torch.no_grad()
+def forward_with_attn_dino(model, x):
+    """DinoV2ViT forward that also returns every block's attention (B, heads, N+1, N+1), CLS = index 0."""
+    z = model.patch_embed(x).flatten(2).transpose(1, 2)
+    z = torch.cat([model.cls_token.expand(z.shape[0], -1, -1), z], dim=1)
+    z = z + model._pos(z.shape[1] - 1)
+    attns = []
+    for blk in model.blocks:
+        at = blk.attn
+        B, N, C = z.shape
+        hd = C // at.num_heads
+        qkv = at.qkv(blk.norm1(z)).reshape(B, N, 3, at.num_heads, hd).permute(2, 0, 3, 1, 4)
+        w = ((qkv[0] @ qkv[1].transpose(-2, -1)) * hd ** -0.5).softmax(-1)
+        z = z + blk.drop_path(blk.ls1(at.proj((w @ qkv[2]).transpose(1, 2).reshape(B, N, C))))
+        z = z + blk.drop_path(blk.ls2(blk.mlp(blk.norm2(z))))
+        attns.append(w)
+    return model.norm(z), attns
+
+
+def dino_map(attns, kind, query):
+    """(B, N_patches) map summing to 1. query='cls': what the CLS token (= the evaluation embedding)
+    attends to; query='patches': mean over the patch queries, i.e. 'attention received', the same
+    quantity as the other rows. kind='rollout' uses attention rollout over all blocks instead of the last one."""
+    if kind == "rollout":
+        R = rollout(attns)
+        m = R[:, 0, 1:] if query == "cls" else R[:, 1:, 1:].mean(1)
+    else:
+        A = attns[-1].mean(1)
+        m = A[:, 0, 1:] if query == "cls" else A[:, 1:, 1:].mean(1)
+    return m / m.sum(-1, keepdim=True)
 
 
 # ───────────────────────── attention + rollout ─────────────────────────
@@ -242,6 +309,9 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--map", choices=["last", "rollout"], default="last",
                     help="last = last layer only (default); rollout = attention rollout over all layers")
+    ap.add_argument("--dino_query", choices=["cls", "patches"], default="cls",
+                    help="DINOv2 rows only. cls (default) = what the CLS token attends to, which is what its "
+                         "evaluation embedding uses; patches = mean over patch queries, comparable to the other rows")
     ap.add_argument("--out", default="attention_methods.png")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--num_heads", type=int, default=None,
@@ -270,9 +340,10 @@ def main():
     archs = {}
     for label, path in specs:
         sd = load_state_dict(path)
-        model, arch, S = build_model(sd, a.num_heads)
+        is_dino = "cls_token" in sd                      # DINOv2 backbone
+        model, arch, S = (build_dino if is_dino else build_model)(sd, a.num_heads)
         model = model.to(a.device)
-        heads = model.encoder.layers[0].self_attn.num_heads
+        heads = model.blocks[0].attn.num_heads if is_dino else model.encoder.layers[0].self_attn.num_heads
         g, N = arch["grid"], arch["grid"] ** 2
         archs[label] = (S, g)
         print(f"\n[{label}] {path}\n  inferred: embed_dim={arch['embed_dim']} grid={g}x{g} patch={arch['patch']}px "
@@ -282,14 +353,22 @@ def main():
                                  transforms.Normalize([0.5] * 3, [0.5] * 3)])   # same as the training/eval pipeline
         x = torch.stack([tf(im) for im in pil]).to(a.device)
 
-        out, attns = forward_with_attn(model, x)
         with torch.no_grad():
-            ref = model(x, [torch.arange(N, device=x.device).unsqueeze(0).expand(B, -1)])   # how FeatureExtractor calls it
-        diff = (out - ref).abs().max().item()
+            if is_dino:
+                out, attns = forward_with_attn_dino(model, x)
+                ref = model.forward_features(x)
+                diff = max((out[:, 0] - ref["cls"]).abs().max().item(),
+                           (out[:, 1:] - ref["patch"]).abs().max().item())
+            else:
+                out, attns = forward_with_attn(model, x)
+                ref = model(x, [torch.arange(N, device=x.device).unsqueeze(0).expand(B, -1)])   # how FeatureExtractor calls it
+                diff = (out - ref).abs().max().item()
         assert diff < 1e-4, f"[{label}] manual forward differs from ContextEncoder.forward (max |diff| = {diff})"
         assert all(torch.allclose(w.sum(-1), torch.ones_like(w.sum(-1)), atol=1e-4) for w in attns), \
             "attention rows must sum to 1"
-        if a.map == "rollout":
+        if is_dino:
+            m = dino_map(attns, a.map, a.dino_query)
+        elif a.map == "rollout":
             R = rollout(attns)
             m = R.mean(1)                                                       # (B, N): mean pooling
         else:
