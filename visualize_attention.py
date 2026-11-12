@@ -357,13 +357,25 @@ def main():
             if is_dino:
                 out, attns = forward_with_attn_dino(model, x)
                 ref = model.forward_features(x)
-                diff = max((out[:, 0] - ref["cls"]).abs().max().item(),
-                           (out[:, 1:] - ref["patch"]).abs().max().item())
+                diff32 = max((out[:, 0] - ref["cls"]).abs().max().item(),
+                             (out[:, 1:] - ref["patch"]).abs().max().item())
+                # The real model uses the fused scaled_dot_product_attention, the manual one matmul+softmax: in
+                # float32 they differ by rounding noise that grows with the activation scale of trained weights.
+                # So the equivalence is checked in float64, where an actual maths mismatch cannot hide.
+                import copy
+                m64, x64 = copy.deepcopy(model).double(), x.double()
+                o64, _ = forward_with_attn_dino(m64, x64)
+                with torch.no_grad():
+                    r64 = m64.forward_features(x64)
+                diff = max((o64[:, 0] - r64["cls"]).abs().max().item(),
+                           (o64[:, 1:] - r64["patch"]).abs().max().item())
+                print(f"  DINOv2 float32 manual-vs-fused max |diff| = {diff32:.1e} (rounding); float64 = {diff:.1e}")
+                del m64, x64
             else:
                 out, attns = forward_with_attn(model, x)
                 ref = model(x, [torch.arange(N, device=x.device).unsqueeze(0).expand(B, -1)])   # how FeatureExtractor calls it
                 diff = (out - ref).abs().max().item()
-        assert diff < 1e-4, f"[{label}] manual forward differs from ContextEncoder.forward (max |diff| = {diff})"
+        assert diff < (1e-8 if is_dino else 1e-4), f"[{label}] manual forward differs from the real forward (max |diff| = {diff})"
         assert all(torch.allclose(w.sum(-1), torch.ones_like(w.sum(-1)), atol=1e-4) for w in attns), \
             "attention rows must sum to 1"
         if is_dino:
