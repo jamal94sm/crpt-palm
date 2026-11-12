@@ -42,6 +42,7 @@ import glob
 import math
 import os
 import sys
+import time
 
 import numpy as np
 import torch
@@ -431,6 +432,103 @@ class Diffusion:
         return x
 
 
+# ═══════════════════════════ progress signals ═══════════════════════════
+def _fork_rng(device):
+    d = torch.device(device)
+    return torch.random.fork_rng(devices=[d.index or 0] if d.type == "cuda" else [])   # keep the training RNG untouched
+
+
+def hms(sec):
+    sec = int(sec)
+    return f"{sec // 3600}h{(sec % 3600) // 60:02d}m" if sec >= 3600 else f"{sec // 60}m{sec % 60:02d}s"
+
+
+def make_val_set(m, val_u8, trg, ctx, device, S_dec):
+    """FIXED held-out batch (images never used for decoder training): masks, representation s, timesteps, noise."""
+    g = torch.Generator().manual_seed(1234)
+    x = to_model(val_u8, device)
+    with _fork_rng(device):
+        torch.manual_seed(1234)
+        ctx_masks, tgt_masks = patchify(x.size(0), m.grid, 1, trg_ratio=trg, ctx_ratio=ctx, device=device)
+        feat = m.represent(x, ctx_masks, tgt_masks)
+    if S_dec != m.S:
+        x = F.interpolate(x, size=(S_dec, S_dec), mode="bilinear", align_corners=False, antialias=True)
+    t = torch.randint(0, 1000, (x.size(0),), generator=g).to(device)
+    noise = torch.randn(x.shape, generator=g).to(device)
+    return dict(x=x, feat=feat, t=t, noise=noise)
+
+
+@torch.no_grad()
+def val_losses(net, diff, V, chunk=64):
+    """eps-prediction MSE on the fixed held-out batch with the TRUE s and with s taken from ANOTHER image.
+    gain = loss(shuffled s) - loss(true s) > 0 means the decoder really uses the representation; ~0 means it ignores it.
+    gain_hiT is the same restricted to the noisiest third of the timesteps (t >= 667), where s matters most."""
+    xt = diff._g(diff.ac.sqrt(), V["t"]) * V["x"] + diff._g((1 - diff.ac).sqrt(), V["t"]) * V["noise"]
+    shuf = V["feat"].roll(1, 0)
+    e_true, e_shuf = [], []
+    for i in range(0, xt.size(0), chunk):
+        sl = slice(i, i + chunk)
+        for feat, acc in ((V["feat"], e_true), (shuf, e_shuf)):
+            acc.append(((net(xt[sl], V["t"][sl], feat[sl]) - V["noise"][sl]) ** 2).mean(dim=(1, 2, 3)))
+    e_true, e_shuf = torch.cat(e_true), torch.cat(e_shuf)
+    hi = V["t"] >= 667
+    return dict(val=e_true.mean().item(), val_shuf=e_shuf.mean().item(), gain=(e_shuf - e_true).mean().item(),
+                gain_hiT=(e_shuf - e_true)[hi].mean().item() if bool(hi.any()) else float("nan"))
+
+
+@torch.no_grad()
+def make_preview(args, m, net, prev_u8, trg, ctx, device, S_dec, step):
+    """Small figure (Image | Context | n samples) of the current EMA decoder on FIXED images and masks."""
+    diff, K, n, patch = Diffusion(device), prev_u8.size(0), args.n_samples, m.S // m.grid
+    fig, ax = plt.subplots(K, 2 + n, figsize=(1.45 * (2 + n), 1.5 * K + 0.5), squeeze=False)
+    for i in range(K):
+        img = prev_u8[i].permute(1, 2, 0).numpy()
+        with _fork_rng(device):
+            torch.manual_seed(args.seed * 1000 + i)                       # same masks as the final figure
+            ctx_masks, tgt_masks = patchify(1, m.grid, 1, trg_ratio=trg, ctx_ratio=ctx, device=device)
+        bx = box_of(tgt_masks[0][0].cpu().numpy(), m.grid, patch)
+        s = m.represent(to_model(prev_u8[i:i + 1], device), ctx_masks, tgt_masks)
+        out = diff.sample(net, s.repeat(n, 1), S_dec, steps=args.preview_steps, seed=args.seed * 1000 + i)
+        if S_dec != m.S:
+            out = F.interpolate(out, size=(m.S, m.S), mode="bilinear", align_corners=False)
+        out = ((out.clamp(-1, 1) + 1) / 2).permute(0, 2, 3, 1).cpu().numpy()
+        ax[i, 0].imshow(img)
+        ax[i, 1].imshow(context_image(img, ctx_masks[0][0].cpu().numpy(), m.grid, patch))
+        ax[i, 1].add_patch(Rectangle(bx[:2], bx[2], bx[3], fill=False, ec="#00c000", lw=1.6))
+        for j in range(n):
+            ax[i, 2 + j].imshow(out[j])
+            ax[i, 2 + j].add_patch(Rectangle(bx[:2], bx[2], bx[3], fill=False, ec="#00c000", lw=1.2))
+    for a_ in ax.ravel():
+        a_.axis("off")
+    fig.suptitle(f"{m.label}: EMA decoder at step {step}", fontsize=9)
+    fig.subplots_adjust(left=0.01, right=0.99, top=0.88, bottom=0.01, wspace=0.03, hspace=0.04)
+    f1 = os.path.join(args.out_dir, f"preview_{m.tag}_step{step:06d}.png")
+    fig.savefig(f1, dpi=110, bbox_inches="tight", pad_inches=0.05)
+    fig.savefig(os.path.join(args.out_dir, f"preview_{m.tag}_latest.png"), dpi=110, bbox_inches="tight", pad_inches=0.05)
+    plt.close(fig)
+    return f1
+
+
+def save_curves(path, hist):
+    if len(hist) < 2:
+        return
+    st = [h["step"] for h in hist]
+    fig, ax = plt.subplots(1, 3, figsize=(12, 3))
+    ax[0].plot(st, [h["loss"] for h in hist], label="train (running avg)")
+    ax[0].plot(st, [h["val"] for h in hist], label="held-out (EMA net)")
+    ax[0].plot(st, [h["val_shuf"] for h in hist], "--", label="held-out, s shuffled")
+    ax[0].set_title("eps-MSE"); ax[0].legend(fontsize=7)
+    ax[1].plot(st, [h["gain"] for h in hist], label="all t")
+    ax[1].plot(st, [h["gain_hiT"] for h in hist], label="noisiest third")
+    ax[1].axhline(0, color="k", lw=0.5); ax[1].set_title("gain = loss(shuffled s) - loss(true s)"); ax[1].legend(fontsize=7)
+    ax[2].plot(st, [h["gnorm"] for h in hist]); ax[2].set_title("grad norm (before clipping)")
+    for a_ in ax:
+        a_.set_xlabel("step"); a_.tick_params(labelsize=7)
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+
+
 # ═══════════════════════════ decoder training ═══════════════════════════
 def decoder_path(args, m):
     name = f"decoder_{m.tag}_{m.source}" + (f"_{m.cond_region}" if m.source == "encoder" else "") + ".pth"
@@ -441,7 +539,7 @@ def make_net(args, m, device):
     return CondUNet(m.D, base=args.decoder_ch, heads=args.decoder_heads).to(device)
 
 
-def train_decoder(args, m, train_u8, trg, ctx, device):
+def train_decoder(args, m, train_u8, trg, ctx, device, preview_u8=None):
     path = decoder_path(args, m)
     S_dec = args.decoder_size or m.S
     net = make_net(args, m, device)
@@ -462,8 +560,17 @@ def train_decoder(args, m, train_u8, trg, ctx, device):
         raise SystemExit(f"[{m.label}] decoder needs training (step {step0} < {args.decoder_steps}): give --train_images")
     n_par = sum(p.numel() for p in net.parameters()) / 1e6
     print(f"  [{m.label}] training decoder: {n_par:.1f}M params, {args.decoder_steps - step0} steps, "
-          f"batch {args.batch_size}, size {S_dec}, source={m.source}")
-    diff, N, run = Diffusion(device), train_u8.size(0), 0.0
+          f"batch {args.batch_size} x accum {args.accum} = {args.batch_size * args.accum}, "
+          f"{'bf16 autocast, ' if args.amp else ''}size {S_dec}, source={m.source}")
+    diff, N, run, gnorm = Diffusion(device), train_u8.size(0), 0.0, 0.0
+    nval = min(args.val_images, N // 10)                                 # held-out images for the validation signals
+    perm = torch.randperm(N, generator=torch.Generator().manual_seed(args.seed))
+    val_idx, tr_idx = perm[:nval], perm[nval:]
+    V = make_val_set(m, train_u8[val_idx], trg, ctx, device, S_dec) if nval > 0 else None
+    print(f"  [{m.label}] {len(tr_idx)} training / {nval} held-out images; validation every {args.val_every} steps, "
+          f"preview every {args.preview_every} steps -> {args.out_dir}")
+    csv_path = os.path.join(args.out_dir, f"train_log_{m.tag}.csv")
+    hist, t0 = [], time.time()
     net.train()
 
     def save(step):
@@ -472,23 +579,48 @@ def train_decoder(args, m, train_u8, trg, ctx, device):
                     "source": m.source, "cond_region": m.cond_region}, path)
 
     for step in range(step0 + 1, args.decoder_steps + 1):
-        idx = torch.randint(0, N, (args.batch_size,))
-        x = to_model(train_u8[idx], device)
-        ctx_masks, tgt_masks = patchify(x.size(0), m.grid, 1, trg_ratio=trg, ctx_ratio=ctx, device=device)
-        feat = m.represent(x, ctx_masks, tgt_masks)
-        if S_dec != m.S:
-            x = F.interpolate(x, size=(S_dec, S_dec), mode="bilinear", align_corners=False, antialias=True)
-        loss = diff.loss(net, x, feat)
         opt.zero_grad(set_to_none=True)
-        loss.backward()
-        nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+        loss_val = 0.0
+        for _ in range(args.accum):                                   # gradient accumulation: effective batch = batch_size * accum
+            idx = tr_idx[torch.randint(0, len(tr_idx), (args.batch_size,))]
+            x = to_model(train_u8[idx], device)
+            ctx_masks, tgt_masks = patchify(x.size(0), m.grid, 1, trg_ratio=trg, ctx_ratio=ctx, device=device)
+            feat = m.represent(x, ctx_masks, tgt_masks)
+            if S_dec != m.S:
+                x = F.interpolate(x, size=(S_dec, S_dec), mode="bilinear", align_corners=False, antialias=True)
+            with torch.autocast(device_type="cuda" if str(device).startswith("cuda") else "cpu",
+                                dtype=torch.bfloat16, enabled=args.amp):
+                loss = diff.loss(net, x, feat) / args.accum
+            loss.backward()
+            loss_val += loss.item()
+        gn_ = nn.utils.clip_grad_norm_(net.parameters(), 1.0)
         opt.step()
         with torch.no_grad():
             for pe, p in zip(ema.parameters(), net.parameters()):
                 pe.mul_(args.ema).add_(p.detach(), alpha=1.0 - args.ema)
-        run = 0.98 * run + 0.02 * loss.item() if step > step0 + 1 else loss.item()
+        first = step == step0 + 1
+        run = loss_val if first else 0.98 * run + 0.02 * loss_val
+        gnorm = float(gn_) if first else 0.98 * gnorm + 0.02 * float(gn_)
         if step % args.log_every == 0 or step == args.decoder_steps:
-            print(f"    [{m.label}] step {step}/{args.decoder_steps}  loss(ema-avg) {run:.4f}")
+            el = time.time() - t0
+            ips = (step - step0) / max(el, 1e-9)
+            mem = f" | {torch.cuda.max_memory_allocated() / 2**30:.1f}GB" if str(device).startswith("cuda") else ""
+            print(f"    [{m.label}] step {step}/{args.decoder_steps} | loss {run:.4f} | gnorm {gnorm:.2f} | "
+                  f"{ips:.2f} it/s | {hms(el)} elapsed, ETA {hms((args.decoder_steps - step) / ips)}{mem}", flush=True)
+        if V is not None and (step % args.val_every == 0 or step == args.decoder_steps):
+            vl = val_losses(ema, diff, V)
+            print(f"      held-out: loss {vl['val']:.4f} | with s shuffled {vl['val_shuf']:.4f} | gain {vl['gain']:+.4f} "
+                  f"(noisiest third {vl['gain_hiT']:+.4f})", flush=True)
+            hist.append(dict(step=step, loss=run, gnorm=gnorm, **vl))
+            new = not os.path.isfile(csv_path)
+            with open(csv_path, "a") as f:
+                if new:
+                    f.write("step,train_loss,gnorm,val_loss,val_loss_shuffled_s,gain,gain_hiT,it_per_s\n")
+                f.write(f"{step},{run:.5f},{gnorm:.4f},{vl['val']:.5f},{vl['val_shuf']:.5f},{vl['gain']:.5f},"
+                        f"{vl['gain_hiT']:.5f},{ips:.3f}\n")
+            save_curves(os.path.join(args.out_dir, f"train_curves_{m.tag}.png"), hist)
+        if preview_u8 is not None and args.preview_every > 0 and (step % args.preview_every == 0 or step == args.decoder_steps):
+            print(f"      preview -> {make_preview(args, m, ema, preview_u8, trg, ctx, device, S_dec, step)}", flush=True)
         if step % args.save_every == 0 and step != args.decoder_steps:
             save(step)
     save(args.decoder_steps)
@@ -540,13 +672,21 @@ def main():
     ap.add_argument("--decoder_ch", type=int, default=64)
     ap.add_argument("--decoder_heads", type=int, default=4)
     ap.add_argument("--decoder_size", type=int, default=0, help="0 = the model's image size; must be divisible by 8")
-    ap.add_argument("--batch_size", type=int, default=32)
+    ap.add_argument("--batch_size", type=int, default=32, help="images per forward/backward pass (lower it on CUDA OOM)")
+    ap.add_argument("--accum", type=int, default=1,
+                    help="gradient-accumulation passes per update; effective batch = batch_size * accum")
+    ap.add_argument("--amp", action="store_true", help="bf16 autocast for the decoder training (about half the activation memory)")
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--ema", type=float, default=0.999)
     ap.add_argument("--sample_steps", type=int, default=100)
     ap.add_argument("--retrain", action="store_true", help="ignore existing decoder files")
     ap.add_argument("--log_every", type=int, default=200)
     ap.add_argument("--save_every", type=int, default=5000)
+    ap.add_argument("--val_every", type=int, default=1000, help="held-out loss / shuffled-s gain every N steps")
+    ap.add_argument("--val_images", type=int, default=256, help="training images held out for the validation signals (0 = off)")
+    ap.add_argument("--preview_every", type=int, default=5000, help="small preview figure every N steps (0 = off)")
+    ap.add_argument("--preview_steps", type=int, default=50, help="sampling steps of the previews (faster than --sample_steps)")
+    ap.add_argument("--preview_k", type=int, default=3, help="number of figure images in the previews")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--dpi", type=int, default=150)
@@ -596,17 +736,19 @@ def main():
         print(f"\ndecoder training images: {len(paths)}")
         train_u8 = load_uint8(paths, S)
 
-    # ── decoders ──
-    print()
-    decoders = {m.tag: train_decoder(a, m, train_u8, trg, ctx, device) for m in methods}
-    del train_u8
-
-    # ── figure ──
+    # ── figure images (also used for the previews while the decoders train) ──
     fig_paths = pick_figure_images(a)
     print("\nfigure images:")
     for p in fig_paths:
         print(f"  {p}")
     imgs_u8 = load_uint8(fig_paths, S)
+
+    # ── decoders ──
+    print()
+    decoders = {m.tag: train_decoder(a, m, train_u8, trg, ctx, device, preview_u8=imgs_u8[:a.preview_k]) for m in methods}
+    del train_u8
+
+    # ── figure ──
     diff = Diffusion(device)
     K, M, n = len(fig_paths), len(methods), a.n_samples
     cols = 2 + M * n
