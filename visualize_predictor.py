@@ -39,6 +39,7 @@ Quick smoke test:  add  --decoder_steps 50 --sample_steps 10 --max_train_images 
 import argparse
 import copy
 import glob
+import json
 import math
 import os
 import sys
@@ -124,9 +125,10 @@ def resolve_methods(args):
     for item in args.methods:
         tag, label = (item.split("=", 1) + [None])[:2] if "=" in item else (item, None)
         tag = tag.strip()
-        plain, resume = find_files(args.ckpt_dir, tag, args.train_label)
+        cdir = dict(kv.split("=", 1) for kv in (args.ckpt_dirs or [])).get(tag, args.ckpt_dir)
+        plain, resume = find_files(cdir, tag, args.train_label)
         if not plain and not resume:
-            print(f"  WARNING - skipped '{tag}': no ckpt_{tag}_train_*.pth in {args.ckpt_dir}")
+            print(f"  WARNING - skipped '{tag}': no ckpt_{tag}_train_*.pth in {cdir}")
             continue
         for kind, lst in (("plain", plain), ("resume", resume)):
             if len(lst) > 1:
@@ -535,8 +537,26 @@ def decoder_path(args, m):
     return os.path.join(args.out_dir, name)
 
 
+def ema_path(args, m):
+    return decoder_path(args, m).replace(".pth", "_ema.pth")
+
+
 def make_net(args, m, device):
     return CondUNet(m.D, base=args.decoder_ch, heads=args.decoder_heads).to(device)
+
+
+def write_ema(args, m, ema, step, S_dec):
+    """Small inference file: EMA weights + everything needed to rebuild the net (no optimizer)."""
+    p = ema_path(args, m)
+    if os.path.isfile(p):
+        try:
+            if int(torch.load(p, map_location="cpu").get("step", -1)) == step:
+                return
+        except Exception:
+            pass
+    torch.save({"ema": ema.state_dict(), "step": step, "S_dec": S_dec, "feat_dim": m.D, "base": args.decoder_ch,
+                "heads": args.decoder_heads, "tag": m.tag, "source": m.source, "cond_region": m.cond_region,
+                "label": m.label, "sample_steps": args.sample_steps}, p)
 
 
 def train_decoder(args, m, train_u8, trg, ctx, device, preview_u8=None):
@@ -554,7 +574,16 @@ def train_decoder(args, m, train_u8, trg, ctx, device, preview_u8=None):
             print(f"  [{m.label}] found {path} (step {step0})")
         else:
             print(f"  [{m.label}] {path} has a different size/width -> training from scratch")
+    elif os.path.isfile(ema_path(args, m)) and not args.retrain:       # inference-only file (no optimizer): cannot resume
+        ck = torch.load(ema_path(args, m), map_location="cpu")
+        if ck.get("S_dec") == S_dec and ck.get("feat_dim") == m.D and ck.get("base") == args.decoder_ch:
+            ema.load_state_dict(ck["ema"]); step0 = int(ck["step"])
+            if step0 < args.decoder_steps:
+                raise SystemExit(f"[{m.label}] only the EMA-only file exists (step {step0}); it cannot be trained further. "
+                                 f"Lower --decoder_steps to {step0} or use the full decoder_*.pth.")
+            print(f"  [{m.label}] using EMA-only file {ema_path(args, m)} (step {step0})")
     if step0 >= args.decoder_steps:
+        write_ema(args, m, ema, step0, S_dec)                            # make sure the inference file exists
         return ema
     if train_u8 is None:
         raise SystemExit(f"[{m.label}] decoder needs training (step {step0} < {args.decoder_steps}): give --train_images")
@@ -623,7 +652,10 @@ def train_decoder(args, m, train_u8, trg, ctx, device, preview_u8=None):
             print(f"      preview -> {make_preview(args, m, ema, preview_u8, trg, ctx, device, S_dec, step)}", flush=True)
         if step % args.save_every == 0 and step != args.decoder_steps:
             save(step)
+        if args.snapshot_every > 0 and step % args.snapshot_every == 0:
+            write_ema(args, m, ema, step, S_dec)
     save(args.decoder_steps)
+    write_ema(args, m, ema, args.decoder_steps, S_dec)
     print(f"  [{m.label}] saved {path}")
     return ema.eval()
 
@@ -649,6 +681,8 @@ def context_image(img_u8, ctx_idx, grid, patch):
 def main():
     ap = argparse.ArgumentParser(description="Decoder visualisation of the predictor / encoder representation (RCDM style)")
     ap.add_argument("--ckpt_dir", default=DEFAULT_CKPT_DIR)
+    ap.add_argument("--ckpt_dirs", nargs="*", default=None, metavar="TAG=DIR",
+                    help="per-method checkpoint folder overriding --ckpt_dir, e.g. palmjepa=/path/a jepa=/path/b")
     ap.add_argument("--methods", nargs="+", default=DEFAULT_METHODS,
                     help="rows, top to bottom: baseline keys as in the file names (jepa dmtjepa palmjepa ...), "
                          "optionally 'key=Row label'")
@@ -681,7 +715,9 @@ def main():
     ap.add_argument("--sample_steps", type=int, default=100)
     ap.add_argument("--retrain", action="store_true", help="ignore existing decoder files")
     ap.add_argument("--log_every", type=int, default=200)
-    ap.add_argument("--save_every", type=int, default=5000)
+    ap.add_argument("--save_every", type=int, default=5000, help="full training checkpoint (with optimizer) every N steps")
+    ap.add_argument("--snapshot_every", type=int, default=5000,
+                    help="small EMA-only inference file (decoder_<tag>_<source>_ema.pth) every N steps (0 = only at the end)")
     ap.add_argument("--val_every", type=int, default=1000, help="held-out loss / shuffled-s gain every N steps")
     ap.add_argument("--val_images", type=int, default=256, help="training images held out for the validation signals (0 = off)")
     ap.add_argument("--preview_every", type=int, default=5000, help="small preview figure every N steps (0 = off)")
@@ -753,6 +789,7 @@ def main():
     K, M, n = len(fig_paths), len(methods), a.n_samples
     cols = 2 + M * n
     fig, ax = plt.subplots(K, cols, figsize=(1.45 * cols, 1.5 * K + 0.5), squeeze=False)
+    rec = dict(images=imgs_u8.permute(0, 2, 3, 1).numpy(), contexts=[], boxes=[], samples=np.zeros((M, K, n, S, S, 3), np.uint8))
     for i in range(K):
         img = imgs_u8[i].permute(1, 2, 0).numpy()
         torch.manual_seed(a.seed * 1000 + i)                          # same masks for every method
@@ -760,7 +797,9 @@ def main():
         bx = box_of(tgt_masks[0][0].cpu().numpy(), grid, patch)
         x = to_model(imgs_u8[i:i + 1], device)
         ax[i, 0].imshow(img)
-        ax[i, 1].imshow(context_image(img, ctx_masks[0][0].cpu().numpy(), grid, patch))
+        cimg = context_image(img, ctx_masks[0][0].cpu().numpy(), grid, patch)
+        rec["contexts"].append(np.asarray(cimg)); rec["boxes"].append(np.asarray(bx, dtype=float))
+        ax[i, 1].imshow(cimg)
         ax[i, 1].add_patch(Rectangle(bx[:2], bx[2], bx[3], fill=False, ec="#00c000", lw=1.6))
         for m_i, m in enumerate(methods):
             s = m.represent(x, ctx_masks, tgt_masks)                  # (1, D)
@@ -768,6 +807,7 @@ def main():
             if S_dec != S:
                 out = F.interpolate(out, size=(S, S), mode="bilinear", align_corners=False)
             out = ((out.clamp(-1, 1) + 1) / 2).permute(0, 2, 3, 1).cpu().numpy()
+            rec["samples"][m_i, i] = (out * 255 + 0.5).astype(np.uint8)
             for j in range(n):
                 a_ = ax[i, 2 + m_i * n + j]
                 a_.imshow(out[j])
@@ -785,6 +825,15 @@ def main():
     fig.savefig(out_png, dpi=a.dpi, bbox_inches="tight", pad_inches=0.05)
     fig.savefig(os.path.splitext(out_png)[0] + ".pdf", bbox_inches="tight", pad_inches=0.05)
     print(f"\nsaved {out_png} (+ .pdf)")
+    base = os.path.splitext(out_png)[0]
+    np.savez_compressed(base + "_samples.npz", images=rec["images"], contexts=np.stack(rec["contexts"]),
+                        boxes=np.stack(rec["boxes"]), samples=rec["samples"], paths=np.array(fig_paths),
+                        methods=np.array([m.tag for m in methods]), labels=np.array([m.label for m in methods]))
+    with open(base + "_config.json", "w") as f:
+        json.dump(dict(args=vars(a), source=source, S=S, grid=grid, trg_ratio=trg, ctx_ratio=ctx,
+                       checkpoints={s["tag"]: dict(plain=s["plain"], resume=s["resume"]) for s in specs},
+                       decoders={m.tag: os.path.basename(ema_path(a, m)) for m in methods}), f, indent=1, default=str)
+    print(f"saved {base}_samples.npz and {base}_config.json (re-draw the figure without the decoders)")
 
 
 if __name__ == "__main__":
