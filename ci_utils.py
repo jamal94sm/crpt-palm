@@ -413,6 +413,8 @@ def run_all_baselines(cfg):
                 _v = getattr(cfg, _n, None)
                 if _v is not None:
                     sched_flags += [f"--{_n}", str(_v)]
+            if int(getattr(cfg, "n_ctx_views", 1) or 1) != 1:          # multi-view context (JEPA / Palm-JEPA)
+                sched_flags += ["--n_ctx_views", str(cfg.n_ctx_views)]
             cmd = [sys.executable, self_main] + shared + trunk_flag + sched_flags + spec["extra"] + \
                   ["--output_name", out_name]
             cwd = here

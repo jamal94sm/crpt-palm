@@ -196,6 +196,10 @@ def get_cfg(args=None):
                    help="Grid size (8 → 8×8=64 patches for 112px)")
     p.add_argument("--num_blocks", type=int, default=2,
                    help="Number of target mask blocks")
+    p.add_argument("--n_ctx_views", type=int, default=1,
+                   help="Context views per image (JEPA / Palm-JEPA only). Each view gets its own context mask "
+                        "and its own random corruption; all views share the target blocks and the single "
+                        "teacher pass; losses are averaged over views. 1 = standard (unchanged) training.")
     p.add_argument("--trg_ratio", type=float, nargs=2,
                    default=[0.10, 0.15])
     p.add_argument("--ctx_ratio", type=float, nargs=2,

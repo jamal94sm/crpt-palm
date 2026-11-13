@@ -554,6 +554,51 @@ def patchify(batch_size, num_patches, num_blocks=2,
     return [ctx_out], tgt_out
 
 
+def extra_context_masks(ctx0, tgt_masks, num_patches, ctx_ratio, n_views,
+                        ar_range=(0.75, 1.5), device="cpu"):
+    """Context masks for --n_ctx_views > 1.
+    ctx0      : (B, Nc) first-view context mask from patchify (kept as view 0)
+    tgt_masks : list of (B, Nt) target blocks, shared by every view
+    Draws n_views - 1 further context blocks per image with the same rule as patchify (block of
+    ctx_ratio, minus all target patches), trims every view to a common length (random subset, as
+    patchify does within a batch) and returns them stacked view-major: (n_views * B, N)."""
+    H = W = num_patches
+    P = H * W
+    B = ctx0.size(0)
+
+    def sample_block(scale):
+        s = torch.empty(()).uniform_(*scale).item()
+        ar = torch.empty(()).uniform_(*ar_range).item()
+        area = max(1, int(s * P))
+        h = max(1, min(H, int(round(math.sqrt(area * ar)))))
+        w = max(1, min(W, int(round(area / h))))
+        y = torch.randint(0, max(1, H - h + 1), ())
+        x = torch.randint(0, max(1, W - w + 1), ())
+        return torch.tensor([(y+i)*W + (x+j) for i in range(h) for j in range(w)], device=device)
+
+    views = [[ctx0[b] for b in range(B)]]
+    for _ in range(n_views - 1):
+        cur = []
+        for b in range(B):
+            occupied = torch.zeros(P, dtype=torch.bool, device=device)
+            for t in tgt_masks:
+                occupied[t[b]] = True
+            for _ in range(10):
+                ctx = sample_block(ctx_ratio)
+                ctx = ctx[~occupied[ctx]]
+                if ctx.numel() > 0:
+                    break
+            else:
+                ctx = (~occupied).nonzero().squeeze(1)
+            cur.append(ctx)
+        views.append(cur)
+    n_min = min(c.numel() for v in views for c in v)
+    return torch.cat([
+        torch.stack([c if c.numel() == n_min else c[torch.randperm(c.numel(), device=device)[:n_min]]
+                     for c in v])
+        for v in views], dim=0)
+
+
 def apply_masks(x, masks):
     out = []
     for m in masks:

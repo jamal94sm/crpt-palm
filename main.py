@@ -34,6 +34,10 @@ baseline exactly):
   --mask_mode line_guided : target-block centres sampled from a per-patch
                         line-saliency map (--saliency_mode gabor | ridge);
                         see line_masking.py.
+  --n_ctx_views V     : V context views per image (JEPA / Palm-JEPA only): own
+                        context mask + own corruption per view, shared target
+                        blocks and teacher pass, losses averaged over views.
+                        V = 1 (default) is the standard single-view training.
 
 """
 
@@ -52,7 +56,7 @@ from dataset import build_datasets, build_cross_dataset_eval_dict
 from models import (ContextEncoder, TargetEncoder, Predictor,
                     StructurePredictor,
                     FeatureExtractor, patchify, apply_masks,
-                    repeat_interleave_batch, update_ema, CompNet, PlainViT,
+                    repeat_interleave_batch, update_ema, extra_context_masks, CompNet, PlainViT,
                     FeatModule, StructureHead, UncertaintyWeighting)
 
 from evaluate import run_full_eval
@@ -271,6 +275,23 @@ def _saliency_sanity(saliency, cfg, use_line_mask, lines=None):
 #  JEPA (self-supervised, with optional structural + supervised terms)
 # ══════════════════════════════════════════════════════════════
 
+def _per_view_structure_loss(pred, tgt, n_views, n_blocks, **kw):
+    """structure_loss averaged over the --n_ctx_views views.
+    pred/tgt rows are ordered [block][view][image] (n_blocks * n_views * B rows). With several views the
+    targets of one image repeat across views, so a single InfoNCE over all rows would treat copies of the
+    positive as negatives; computing the loss per view and averaging avoids that. n_views == 1 -> unchanged."""
+    if n_views == 1:
+        return structure_loss(pred, tgt, **kw)
+    B = pred.size(0) // (n_blocks * n_views)
+    losses, stats = [], []
+    for v in range(n_views):
+        pv = pred.view(n_blocks, n_views, B, *pred.shape[1:])[:, v].reshape(n_blocks * B, *pred.shape[1:])
+        tv = tgt.view(n_blocks, n_views, B, *tgt.shape[1:])[:, v].reshape(n_blocks * B, *tgt.shape[1:])
+        l, st = structure_loss(pv, tv, **kw)
+        losses.append(l); stats.append(st)
+    return torch.stack(losses).mean(), {k: sum(st[k] for st in stats) / n_views for k in stats[0]}
+
+
 def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     img_size = (cfg.img_size, cfg.img_size)
 
@@ -441,6 +462,17 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
               f"sim={cfg.cjepa_sim_weight} std={cfg.cjepa_std_weight} "
               f"cov={cfg.cjepa_cov_weight} blocks={cfg.num_blocks}")
 
+    n_views = int(getattr(cfg, "n_ctx_views", 1) or 1)
+    if n_views < 1:
+        raise SystemExit("--n_ctx_views must be >= 1")
+    if n_views > 1:
+        bad = [n for n, on in (("DMT-JEPA", use_dmtjepa), ("C-JEPA regulariser", use_cjepa),
+                               ("supervision", use_sup)) if on]
+        if bad:
+            raise SystemExit(f"--n_ctx_views {n_views} is only implemented for the standard predictor "
+                             f"(JEPA / Palm-JEPA); not supported with: {', '.join(bad)}")
+        print(f"  Context views per image: {n_views} (shared target blocks and teacher pass, "
+              f"independent corruption + context mask per view, losses averaged over views)")
     print(f"  Corruption: {'ON' if getattr(cfg, 'use_corruption', 0) else 'OFF'}"
           f"  Structural: {'ON' if use_struct else 'OFF'}"
           f"  Supervision: {'ON' if use_sup else 'OFF'}"
@@ -587,10 +619,24 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                 ep_topq += target_topq_fraction(saliency, tgt_masks)
                 n_topq += 1
 
+            # ─── multiple context views (--n_ctx_views V > 1) ───
+            # V copies of the batch are stacked along the batch dim (view-major: rows v*B..v*B+B-1 = view v).
+            # Every view shares the SAME target blocks (and so the same teacher targets) but gets its own
+            # context mask and its own random corruption. V = 1 leaves everything exactly as before.
+            Bv = B * n_views
+            if n_views > 1:
+                ctx_masks = [extra_context_masks(ctx_masks[0], tgt_masks, cfg.num_patches,
+                                                 tuple(cfg.ctx_ratio), n_views, device=cfg.device)]
+                tgt_masks = [t.repeat(n_views, 1) for t in tgt_masks]
+
             if cfg.use_corruption:
-                images_ctx = corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD)
+                if n_views > 1:
+                    images_ctx = torch.cat([corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD)
+                                            for _ in range(n_views)], dim=0)
+                else:
+                    images_ctx = corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD)
             else:
-                images_ctx = images
+                images_ctx = images if n_views == 1 else images.repeat(n_views, 1, 1, 1)
             ctx_embeds = context_encoder(images_ctx, ctx_masks)
 
             with torch.no_grad():
@@ -599,6 +645,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
             with torch.no_grad():
                 tgt_full = target_encoder(images)
+                if n_views > 1:
+                    tgt_full = tgt_full.repeat(n_views, 1, 1)          # one teacher pass, reused by every view
                 if use_dmtjepa:
                     lat_targets, dmt_valid = dmtjepa_targets(
                         target_agg_head, tgt_full, tgt_masks,
@@ -611,7 +659,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                 else:
                     tgt_embeds = apply_masks(tgt_full, tgt_masks)
                     tgt_embeds = repeat_interleave_batch(
-                        tgt_embeds, B, repeat=len(ctx_masks))
+                        tgt_embeds, Bv, repeat=len(ctx_masks))
                     dmt_valid = None
 
             # DMT-JEPA uses its own predictor signature (single pooled
@@ -664,6 +712,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                 with torch.no_grad():
                     desc = patch_energy_descriptor(
                         gabor_resp, cfg.num_patches)   # CLEAN image (raw responses from above)
+                    if n_views > 1:
+                        desc = desc.repeat(n_views, 1, 1)
 
                 if use_a1:
                     t_a1 = apply_masks(desc, ctx_masks)        # visible patches
@@ -671,8 +721,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                         assert t_a1.shape[:2] == ctx_embeds.shape[:2], (
                             f"A1 misalignment: t_a1 {tuple(t_a1.shape)} vs "
                             f"ctx_embeds {tuple(ctx_embeds.shape)}")
-                    l_a1, s_a1 = structure_loss(
-                        struct_head(ctx_embeds), t_a1,
+                    l_a1, s_a1 = _per_view_structure_loss(
+                        struct_head(ctx_embeds), t_a1, n_views, 1,
                         kind=cfg.loss_a1,
                         temperature=cfg.infonce_temp,
                         max_n=cfg.infonce_max_n)
@@ -683,14 +733,14 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
                 if use_a2:
                     t_a2 = repeat_interleave_batch(
-                        apply_masks(desc, tgt_masks), B,
+                        apply_masks(desc, tgt_masks), Bv,
                         repeat=len(ctx_masks))                 # hidden patches
                     if epoch == 1 and n_bat == 0:
                         assert t_a2.shape[:2] == struct_hidden.shape[:2], (
                             f"A2 misalignment: t_a2 {tuple(t_a2.shape)} vs "
                             f"struct_hidden {tuple(struct_hidden.shape)}")
-                    l_a2, s_a2 = structure_loss(
-                        struct_head_a2(struct_hidden), t_a2,
+                    l_a2, s_a2 = _per_view_structure_loss(
+                        struct_head_a2(struct_hidden), t_a2, n_views, cfg.num_blocks,
                         kind=cfg.loss_a2,
                         temperature=cfg.infonce_temp,
                         max_n=cfg.infonce_max_n)
