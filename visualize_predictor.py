@@ -638,6 +638,7 @@ def train_decoder(args, m, train_u8, trg, ctx, device, preview_u8=None):
                   f"{ips:.2f} it/s | {hms(el)} elapsed, ETA {hms((args.decoder_steps - step) / ips)}{mem}", flush=True)
         if V is not None and (step % args.val_every == 0 or step == args.decoder_steps):
             vl = val_losses(ema, diff, V)
+            ips = (step - step0) / max(time.time() - t0, 1e-9)
             print(f"      held-out: loss {vl['val']:.4f} | with s shuffled {vl['val_shuf']:.4f} | gain {vl['gain']:+.4f} "
                   f"(noisiest third {vl['gain_hiT']:+.4f})", flush=True)
             hist.append(dict(step=step, loss=run, gnorm=gnorm, **vl))
