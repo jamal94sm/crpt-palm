@@ -81,6 +81,32 @@ BASELINE_SPECS = [
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
                "--w_a2", "0.3"]},
+    # ─── structural-target ablation: Palm-JEPA with the Gabor target replaced ───
+    {"key": "palmjepa_sobel", "name": "Palm-JEPA (Sobel target)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3", "--struct_target", "sobel"]},
+    {"key": "palmjepa_hog", "name": "Palm-JEPA (HOG target)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3", "--struct_target", "hog"]},
+    {"key": "palmjepa_ridge", "name": "Palm-JEPA (Hessian ridge target)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3", "--struct_target", "ridge"]},
+    {"key": "palmjepa_lbp", "name": "Palm-JEPA (LBP target)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3", "--struct_target", "lbp"]},
+    {"key": "palmjepa_random", "name": "Palm-JEPA (random filters target)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3", "--struct_target", "random"]},
     # ─── ablation rows (corruption / structure added to each JEPA variant) ───
     {"key": "jepa_corr", "name": "I-JEPA + corruption", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1"]},
@@ -302,6 +328,14 @@ def get_cfg(args=None):
                         "a2 = structure on hidden patches (via predictor). "
                         "both = A1+A2 sharing (or not, see struct_head_mode) "
                         "one structure head.")
+    p.add_argument("--struct_target", default="gabor",
+                   choices=["gabor", "sobel", "hog", "ridge", "lbp", "random"],
+                   help="Per-patch structure descriptor predicted by A1/A2 (see struct_targets.py). "
+                        "gabor = Palm-JEPA default; sobel = oriented gradient energy; hog = HOG cell "
+                        "histogram; ridge = Hessian crease response (--ridge_sigmas scales); lbp = "
+                        "rotation-invariant uniform LBP histogram; random = fixed random filter bank "
+                        "with the Gabor bank's shape. Orientations: --gabor_orient; "
+                        "--gabor_gray 0 = per RGB channel.")
     p.add_argument("--w_a1", type=float, default=0.3)
     p.add_argument("--w_a2", type=float, default=0.3)
     p.add_argument("--struct_head_hidden", type=int, default=128)

@@ -62,6 +62,7 @@ from models import (ContextEncoder, TargetEncoder, Predictor,
 from evaluate import run_full_eval
 from corruption import corrupt_images
 from gabor import GaborBank, patch_energy_descriptor, sanity_report
+from struct_targets import build_struct_target
 from struct_loss import structure_loss, grad_conflict_cosine
 from sup_loss import supcon_loss, build_sup_head
 from cjepa_loss import cjepa_regularizer, CJEPAProjector
@@ -315,7 +316,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     use_a2 = bool(getattr(cfg, "use_a2", False))
     use_struct = use_a1 or use_a2
     use_shared_predictor_trunk = bool(getattr(cfg, "use_shared_predictor_trunk", True))
-    gabor_bank = struct_head = struct_head_a2 = task_weighter = None
+    gabor_bank = struct_bank = struct_head = struct_head_a2 = task_weighter = None
     predictor_structure = None
 
     # ─── DMT-JEPA (Mo & Yun, arXiv:2405.17995) -- FAITHFUL architecture ───
@@ -358,20 +359,18 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
         print(f"  Structure predictor (SEPARATE trunk): {n_pred_struct/1e6:.2f}M params")
 
     if use_struct:
-        gabor_bank = GaborBank(
-            n_orient=cfg.gabor_orient,
-            scales=cfg.gabor_scales,
-            gamma=cfg.gabor_gamma,
-            per_channel=not bool(getattr(cfg, "gabor_gray", 1)),
-        ).to(cfg.device)
+        # structure target (--struct_target); 'gabor' builds exactly the original GaborBank
+        struct_bank = build_struct_target(cfg).to(cfg.device)
+        if getattr(cfg, "struct_target", "gabor") == "gabor":
+            gabor_bank = struct_bank
         struct_head = StructureHead(
-            cfg.embed_dim, gabor_bank.K,
+            cfg.embed_dim, struct_bank.K,
             hidden=cfg.struct_head_hidden).to(cfg.device)
 
         # Separate head only means anything when BOTH tasks are active.
         if cfg.struct_head_mode == "separate" and use_a1 and use_a2:
             struct_head_a2 = StructureHead(
-                cfg.embed_dim, gabor_bank.K,
+                cfg.embed_dim, struct_bank.K,
                 hidden=cfg.struct_head_hidden).to(cfg.device)
         else:
             struct_head_a2 = struct_head          # alias -> shared behaviour
@@ -436,15 +435,18 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             task_weighter = UncertaintyWeighting(n_tasks).to(cfg.device)
 
     if use_struct:
-        mode = "per-channel RGB" if gabor_bank.per_channel else "grayscale"
+        mode = "per-channel RGB" if struct_bank.per_channel else "grayscale"
         head_mode = ("separate" if struct_head_a2 is not struct_head
                      else "shared")
-        print(f" Gabor bank: K={gabor_bank.K} "
-              f"({cfg.gabor_orient} orient x {gabor_bank.n_scales} scales, "
-              f"gamma={cfg.gabor_gamma}, {mode})")
-        print(f" Gabor scales: {cfg.gabor_scales}")
+        if struct_bank is gabor_bank:
+            print(f" Gabor bank: K={gabor_bank.K} "
+                  f"({cfg.gabor_orient} orient x {gabor_bank.n_scales} scales, "
+                  f"gamma={cfg.gabor_gamma}, {mode})")
+            print(f" Gabor scales: {cfg.gabor_scales}")
+        else:
+            print(f"  Structure target: {struct_bank.summary()}")
         print(f"  Structure head: {n_sh/1e6:.3f}M params  "
-              f"(hidden={cfg.struct_head_hidden} -> {gabor_bank.K}, {head_mode})")
+              f"(hidden={cfg.struct_head_hidden} -> {struct_bank.K}, {head_mode})")
         print(f"  Struct out norm: {'ON' if cfg.norm_struct_out else 'OFF'}")
         print(f"  Struct mode: {cfg.struct_mode}   "
               f"loss_a1={cfg.loss_a1 if use_a1 else '—'}  "
@@ -710,8 +712,10 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             l_a1 = l_a2 = None
             if use_struct:
                 with torch.no_grad():
+                    struct_resp = (gabor_resp if struct_bank is gabor_bank
+                                   else struct_bank(images))   # --struct_target != gabor
                     desc = patch_energy_descriptor(
-                        gabor_resp, cfg.num_patches)   # CLEAN image (raw responses from above)
+                        struct_resp, cfg.num_patches)  # CLEAN image (raw responses from above)
                     if n_views > 1:
                         desc = desc.repeat(n_views, 1, 1)
 
@@ -750,7 +754,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                     n_a2 += 1
 
                 if epoch == 1 and n_bat == 0:
-                    rep = sanity_report(gabor_bank, images, cfg.num_patches)
+                    rep = sanity_report(struct_bank, images, cfg.num_patches)
                     print("\n  ── Structural sanity check (epoch 1, batch 0) ──")
                     for k, v in rep.items():
                         print(f"      {k}: {v}")
