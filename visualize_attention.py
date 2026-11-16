@@ -1,11 +1,22 @@
 """visualize_attention.py -- LAST-LAYER attention maps of several trained JEPA-family encoders
 (rows = methods) on k palm images (columns).
 
-Default methods / checkpoint folder (the files written by --save_ckpt, one per method):
+Default methods (rows, top to bottom) and checkpoint folder (the files written by --save_ckpt, one per method):
+    <ckpt_dir>/ckpt_vicreg_train_<label>.pth    -> row "VICReg"
+    <ckpt_dir>/ckpt_maskfeat_train_<label>.pth  -> row "MaskFeat"
+    <ckpt_dir>/ckpt_dinov2_train_<label>.pth    -> row "DINOv2"
     <ckpt_dir>/ckpt_jepa_train_<label>.pth      -> row "JEPA"
+    <ckpt_dir>/ckpt_cjepa_train_<label>.pth     -> row "C-JEPA"
     <ckpt_dir>/ckpt_dmtjepa_train_<label>.pth   -> row "DMT-JEPA"
     <ckpt_dir>/ckpt_palmjepa_train_<label>.pth  -> row "Palm-JEPA"
-(the *_resume.pth files are ignored). They hold the evaluation (target) encoder.
+(the *_resume.pth files are ignored; *_best.pth / *_last.pth only with --ckpt_which). They hold the evaluation
+encoder. VICReg and MaskFeat use the same ViT as the JEPA encoders (no CLS token, mean-pooled patch tokens), so
+their rows show the same quantity; MaskFeat's unused [MASK] token is dropped and its forward is checked against
+the real MaskedViT.
+
+WHICH ROWS: --methods selects and orders them (a subset is fine), --skip removes some from the default list,
+--ckpt_dirs TAG=DIR takes a method's checkpoint from another folder. FONT SIZE: --font_scale (all text),
+--label_size / --title_size / --cbar_size (individually), --cell (inches per image).
 
 WHAT IS SHOWN (default --map last)
 The encoder has no CLS token and the evaluation embedding is the MEAN of the patch tokens
@@ -27,6 +38,9 @@ Run from the repo root (models.py importable):
       --image_dir /home/pai-ng/Jamal/CASIA-MS-ROI --out attention_methods.png
   python visualize_attention.py --images a.jpg b.jpg c.jpg --methods jepa dmtjepa palmjepa
   python visualize_attention.py --methods "JEPA=/path/a.pth" "Palm-JEPA=/path/b.pth"   # explicit files
+  python visualize_attention.py --skip vicreg maskfeat                  # all default rows except these
+  python visualize_attention.py --methods dinov2 jepa palmjepa --font_scale 1.8
+  python visualize_attention.py --ckpt_dir A --ckpt_dirs palmjepa=B dinov2=C --ckpt_which last
 """
 import argparse
 import glob
@@ -50,9 +64,13 @@ from models import ContextEncoder
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".bmp")
 DEFAULT_CKPT_DIR = "out_xd_xpalm_xjtu_to_casia_aug8"
 DEFAULT_IMAGE_DIR = "/home/pai-ng/Jamal/CASIA-MS-ROI"
-DEFAULT_METHODS = ["jepa", "cjepa", "dmtjepa", "dinov2", "palmjepa"]
-DISPLAY_NAME = {"jepa": "JEPA", "cjepa": "C-JEPA", "dmtjepa": "DMT-JEPA",
-                "dinov2": "DINOv2", "palmjepa": "Palm-JEPA"}
+DEFAULT_METHODS = ["vicreg", "maskfeat", "dinov2", "jepa", "cjepa", "dmtjepa", "palmjepa"]
+DISPLAY_NAME = {"vicreg": "VICReg", "maskfeat": "MaskFeat", "dinov2": "DINOv2", "jepa": "JEPA",
+                "cjepa": "C-JEPA", "dmtjepa": "DMT-JEPA", "palmjepa": "Palm-JEPA"}
+
+
+def _norm(s):
+    return str(s).lower().replace("-", "").replace("_", "").replace(" ", "")
 
 
 # ───────────────────────── checkpoint ─────────────────────────
@@ -110,16 +128,20 @@ def build_model(sd, num_heads=None):
 
 
 # ───────────────────────── DINOv2 backbone (CLS token, blocks.*) ─────────────────────────
-def _dinov2_module():
-    import importlib.util          # load dinov2-palm/models.py under another name: it clashes with models.py
+def _palm_module(subdir, name):
+    import importlib.util          # load <subdir>/models.py under another name: it clashes with models.py
     for base in (os.path.dirname(os.path.abspath(__file__)), os.getcwd()):
-        p = os.path.join(base, "dinov2-palm", "models.py")
+        p = os.path.join(base, subdir, "models.py")
         if os.path.isfile(p):
-            spec = importlib.util.spec_from_file_location("dinov2_palm_models", p)
+            spec = importlib.util.spec_from_file_location(name, p)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             return mod
-    raise SystemExit("dinov2-palm/models.py not found (run from the repo root)")
+    raise SystemExit(f"{subdir}/models.py not found (run from the repo root)")
+
+
+def _dinov2_module():
+    return _palm_module("dinov2-palm", "dinov2_palm_models")
 
 
 def build_dino(sd, num_heads=None):
@@ -228,12 +250,15 @@ def normalized_entropy(contrib):
 
 
 # ───────────────────────── methods / checkpoints ─────────────────────────
-def find_ckpt(ckpt_dir, tag, train_label=None):
-    """ckpt_<tag>_train_<label>.pth inside ckpt_dir (the *_resume.pth files are ignored)."""
-    hits = sorted(p for p in glob.glob(os.path.join(ckpt_dir, f"ckpt_{tag}_train_*.pth"))
-                  if not p.endswith("_resume.pth"))
+def find_ckpt(ckpt_dir, tag, train_label=None, which="plain"):
+    """ckpt_<tag>_train_<label>[_best|_last].pth inside ckpt_dir. which='plain' (default) = the file without a
+    suffix; 'best' / 'last' = the *_best.pth / *_last.pth files. The *_resume.pth files are always ignored."""
+    sfx = f"_{which}" if which in ("best", "last") else ""
+    hits = sorted(p for p in glob.glob(os.path.join(ckpt_dir, f"ckpt_{tag}_train_*{sfx}.pth"))
+                  if not p.endswith("_resume.pth")
+                  and (sfx or not p.endswith(("_best.pth", "_last.pth"))))
     if train_label:
-        hits = [p for p in hits if os.path.basename(p) == f"ckpt_{tag}_train_{train_label}.pth"]
+        hits = [p for p in hits if os.path.basename(p) == f"ckpt_{tag}_train_{train_label}{sfx}.pth"]
     return hits
 
 
@@ -242,20 +267,33 @@ def resolve_methods(args):
          tag                (jepa | dmtjepa | palmjepa | any tag in the folder)  -> found in --ckpt_dir
          tag=Label          same, with a custom row name
          Label=/path/x.pth  an explicit checkpoint file
-         /path/x.pth        an explicit checkpoint file (row name = file name)"""
+         /path/x.pth        an explicit checkpoint file (row name = file name)
+    --skip drops rows (by tag or label); --ckpt_dirs TAG=DIR overrides --ckpt_dir for one method."""
     specs, missing = [], []
+    skip = {_norm(x) for x in (args.skip or [])}
+    dirs = {}
+    for kv in (args.ckpt_dirs or []):
+        if "=" not in kv:
+            raise SystemExit(f"--ckpt_dirs expects TAG=DIR, got '{kv}'")
+        k, v = kv.split("=", 1)
+        dirs[_norm(k)] = v
     for item in args.methods:
         left, right = (item.split("=", 1) + [None])[:2] if "=" in item else (item, None)
+        if _norm(left) in skip or (right is not None and _norm(right) in skip):
+            print(f"  [{left}] skipped (--skip)")
+            continue
         if right is not None and right.lower().endswith(".pth"):
             label, path = left, right
         elif left.lower().endswith(".pth"):
             label, path = os.path.splitext(os.path.basename(left))[0], left
         else:
             tag = left
-            label = right or DISPLAY_NAME.get(tag.lower().replace("-", "").replace("_", ""), tag)
-            hits = find_ckpt(args.ckpt_dir, tag.lower().replace("-", "").replace("_", ""), args.train_label)
+            label = right or DISPLAY_NAME.get(_norm(tag), tag)
+            cdir = dirs.get(_norm(tag), args.ckpt_dir)
+            hits = find_ckpt(cdir, _norm(tag), args.train_label, args.ckpt_which)
             if not hits:
-                missing.append(f"{tag}: no ckpt_{tag}_train_*.pth in {args.ckpt_dir}")
+                missing.append(f"{tag}: no ckpt_{_norm(tag)}_train_*"
+                               f"{'_' + args.ckpt_which if args.ckpt_which != 'plain' else ''}.pth in {cdir}")
                 continue
             if len(hits) > 1:
                 print(f"  [{tag}] {len(hits)} checkpoints match; using {os.path.basename(hits[0])} "
@@ -299,6 +337,12 @@ def main():
     ap.add_argument("--ckpt_dir", default=DEFAULT_CKPT_DIR, help="folder with the ckpt_<method>_train_<label>.pth files")
     ap.add_argument("--methods", nargs="+", default=DEFAULT_METHODS,
                     help="rows, top to bottom: tags (jepa dmtjepa palmjepa), tag=Label, Label=file.pth or file.pth")
+    ap.add_argument("--skip", nargs="*", default=None, metavar="TAG",
+                    help="rows to leave out of --methods (tags or labels, e.g. --skip vicreg maskfeat)")
+    ap.add_argument("--ckpt_dirs", nargs="*", default=None, metavar="TAG=DIR",
+                    help="checkpoint folder of single methods, overriding --ckpt_dir (e.g. palmjepa=/path/a dinov2=/path/b)")
+    ap.add_argument("--ckpt_which", choices=["plain", "best", "last"], default="plain",
+                    help="plain = ckpt_<tag>_train_<label>.pth (default); best / last = the *_best.pth / *_last.pth files")
     ap.add_argument("--train_label", default=None,
                     help="only needed when a method has several checkpoints, e.g. 'xpalm+xjtu'")
     ap.add_argument("--k", "--n", dest="k", type=int, default=5, help="number of palm images (columns)")
@@ -320,11 +364,19 @@ def main():
     ap.add_argument("--alpha", type=float, default=0.55, help="opacity of the attention overlay")
     ap.add_argument("--cmap", default="jet")
     ap.add_argument("--no_image_row", action="store_true", help="do not draw the row with the plain images")
+    ap.add_argument("--font_scale", type=float, default=1.0,
+                    help="multiplies every font size in the figure (row names, colorbar, entropy titles); e.g. 1.8")
+    ap.add_argument("--label_size", type=float, default=None, help="row-name font size in pt (default 11 x --font_scale)")
+    ap.add_argument("--title_size", type=float, default=None, help="entropy-title font size in pt (default 6 x --font_scale)")
+    ap.add_argument("--cbar_size", type=float, default=None, help="colorbar font size in pt (default 8 x --font_scale)")
+    ap.add_argument("--cell", type=float, default=2.15, help="height and width of one image cell in inches")
     ap.add_argument("--show_entropy", action="store_true", help="print H/Hmax (1 = uniform map) above every map")
     ap.add_argument("--dpi", type=int, default=150)
     a = ap.parse_args()
     if a.k < 1:
         raise SystemExit("--k must be >= 1")
+    if a.font_scale <= 0 or a.cell <= 0:
+        raise SystemExit("--font_scale and --cell must be > 0")
     if not a.images and not a.image_dir:
         raise SystemExit("Give --images ... or --image_dir ...")
 
@@ -341,6 +393,9 @@ def main():
     for label, path in specs:
         sd = load_state_dict(path)
         is_dino = "cls_token" in sd                      # DINOv2 backbone
+        is_maskfeat = ("mask_token" in sd) and not is_dino                 # MaskFeat's MaskedViT: ContextEncoder + an unused [MASK] token
+        if is_maskfeat:
+            sd = {k: v for k, v in sd.items() if k != "mask_token"}
         model, arch, S = (build_dino if is_dino else build_model)(sd, a.num_heads)
         model = model.to(a.device)
         heads = model.blocks[0].attn.num_heads if is_dino else model.encoder.layers[0].self_attn.num_heads
@@ -375,6 +430,15 @@ def main():
                 out, attns = forward_with_attn(model, x)
                 ref = model(x, [torch.arange(N, device=x.device).unsqueeze(0).expand(B, -1)])   # how FeatureExtractor calls it
                 diff = (out - ref).abs().max().item()
+                if is_maskfeat:                          # also against MaskFeat's own forward (mask=None, as at evaluation)
+                    sd_full = load_state_dict(path)
+                    nat = _palm_module("maskfeat-palm", "maskfeat_palm_models").MaskedViT(
+                        (S, S), g, arch["embed_dim"], depth=arch["depth"], num_heads=heads, mlp_ratio=arch["mlp_ratio"])
+                    nat.load_state_dict(sd_full, strict=True)
+                    nat = nat.to(a.device).eval()
+                    d_nat = (out - nat(x, mask=None)).abs().max().item()
+                    assert d_nat < 1e-4, f"[{label}] differs from MaskFeat's own forward (max |diff| = {d_nat})"
+                    print(f"  MaskFeat: [MASK] token dropped (unused at evaluation); max |diff| vs MaskedViT.forward = {d_nat:.1e}")
         assert diff < (1e-8 if is_dino else 1e-4), f"[{label}] manual forward differs from the real forward (max |diff| = {diff})"
         assert all(torch.allclose(w.sum(-1), torch.ones_like(w.sum(-1)), atol=1e-4) for w in attns), \
             "attention rows must sum to 1"
@@ -399,31 +463,48 @@ def main():
     ups = [(lab, upsample_maps(mp, D).numpy(), ent, mp) for lab, mp, ent in rows]
 
     R_ = len(ups) + (0 if a.no_image_row else 1)
-    fig, ax = plt.subplots(R_, B, figsize=(2.15 * B + 1.3, 2.15 * R_ + 0.7), squeeze=False)
+    fs = a.font_scale
+    lab_sz = a.label_size if a.label_size else 11 * fs
+    ttl_sz = a.title_size if a.title_size else 6 * fs
+    cb_sz = a.cbar_size if a.cbar_size else 8 * fs
+    cell = a.cell
+    # margins in inches, so that big fonts get the room they need
+    left_in = 0.15 + lab_sz / 72 * 1.4
+    right_in = 0.55 + cb_sz / 72 * 2.4
+    gap_w = 0.04
+    gap_h = 0.05 + (ttl_sz / 72 * 1.7 if a.show_entropy else 0.0)
+    top_in, bot_in = 0.08, 0.08
+    W = left_in + cell * B + gap_w * (B - 1) + right_in
+    H = top_in + cell * R_ + gap_h * (R_ - 1) + bot_in
+    longest = max(len(r[0]) for r in ups) if ups else 0
+    if longest * lab_sz * 0.62 / 72 > cell * 1.1:
+        print(f"  WARNING: the longest row name ({longest} chars at {lab_sz:.0f} pt) is taller than a cell "
+              f"({cell:g} in); lower --label_size / --font_scale or raise --cell.")
+    fig, ax = plt.subplots(R_, B, figsize=(W, H), squeeze=False)
     r0 = 0
     if not a.no_image_row:
         for i, p in enumerate(paths):
             ax[0, i].imshow(disp[i]); ax[0, i].axis("off")
-        ax[0, 0].text(-0.05, 0.5, "Image", transform=ax[0, 0].transAxes, rotation=90, va="center", ha="right",
-                      fontsize=11, fontweight="bold")
+        ax[0, 0].text(-0.03, 0.5, "Image", transform=ax[0, 0].transAxes, rotation=90, va="center", ha="right",
+                      fontsize=lab_sz, fontweight="bold")
         r0 = 1
     for r, (lab, up, ent, _) in enumerate(ups, start=r0):
         for i in range(B):
             ax[r, i].imshow(disp[i])
             ax[r, i].imshow(up[i], cmap=a.cmap, alpha=a.alpha, vmin=0, vmax=1)
             if a.show_entropy:
-                ax[r, i].set_title(f"H/Hmax = {ent[i]:.3f}", fontsize=6)
+                ax[r, i].set_title(f"H/Hmax = {ent[i]:.3f}", fontsize=ttl_sz, pad=2)
             ax[r, i].axis("off")
-        ax[r, 0].text(-0.05, 0.5, lab, transform=ax[r, 0].transAxes, rotation=90, va="center", ha="right",
-                      fontsize=11, fontweight="bold")
+        ax[r, 0].text(-0.03, 0.5, lab, transform=ax[r, 0].transAxes, rotation=90, va="center", ha="right",
+                      fontsize=lab_sz, fontweight="bold")
 
-    fig.subplots_adjust(left=0.07, right=0.90, top=0.98, bottom=0.02,
-                        wspace=0.03, hspace=0.05 if not a.show_entropy else 0.18)
-    cax = fig.add_axes([0.92, 0.2, 0.014, 0.6])
+    fig.subplots_adjust(left=left_in / W, right=1 - right_in / W, top=1 - top_in / H, bottom=bot_in / H,
+                        wspace=gap_w / cell, hspace=gap_h / cell)
+    cax = fig.add_axes([(W - right_in + 0.12) / W, 0.2, 0.16 / W, 0.6])
     sm = plt.cm.ScalarMappable(cmap=a.cmap, norm=plt.Normalize(0, 1))
     cb = fig.colorbar(sm, cax=cax)
-    cb.set_label("relative attention", fontsize=8)
-    cb.ax.tick_params(labelsize=7)
+    cb.set_label("relative attention", fontsize=cb_sz)
+    cb.ax.tick_params(labelsize=cb_sz * 0.88)
     plt.savefig(a.out, dpi=a.dpi, bbox_inches="tight", pad_inches=0.15)
     npz = os.path.splitext(a.out)[0] + ".npz"
     np.savez(npz, paths=np.array(paths), methods=np.array([r[0] for r in rows]), map_type=a.map,
