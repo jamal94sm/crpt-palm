@@ -287,6 +287,17 @@ def _saliency_sanity(saliency, cfg, use_line_mask, lines=None):
 #  JEPA (self-supervised, with optional structural + supervised terms)
 # ══════════════════════════════════════════════════════════════
 
+def koleo_loss(z, eps=1e-8):
+    """KoLeo regulariser (Sablayrolles et al.; DINOv2): -mean(log d_nn) of L2-normalised features z (n, D),
+    d_nn = distance to the nearest OTHER sample in the batch. Pushes features to spread uniformly."""
+    z = F.normalize(z.float(), dim=-1)
+    sim = z @ z.t()
+    sim.fill_diagonal_(-2.0)
+    nn_idx = sim.argmax(dim=1)
+    d = (z - z[nn_idx]).norm(dim=-1)
+    return -torch.log(d + eps).mean(), d.mean().item()
+
+
 def _per_view_structure_loss(pred, tgt, n_views, n_blocks, **kw):
     """structure_loss averaged over the --n_ctx_views views.
     pred/tgt rows are ordered [block][view][image] (n_blocks * n_views * B rows). With several views the
@@ -500,6 +511,9 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     _tag = float(getattr(cfg, "target_aug_strength", 0.0) or 0.0)
     if _tag > 0 and use_dmtjepa:
         raise SystemExit("--target_aug_strength > 0 is not supported with DMT-JEPA")
+    use_koleo = bool(getattr(cfg, "use_koleo", 0)) and cfg.koleo_weight > 0
+    if use_koleo:
+        print(f"  KoLeo: ON  weight={cfg.koleo_weight}  (pooled context features, per view)")
     print(f"  Targets x contexts: M={n_targets} target views x {cfg.num_blocks} blocks = {n_tb} target blocks; "
           f"N={n_views} context views -> {n_tb * n_views} (context, target-block) pairs per image, "
           f"loss averaged over pairs"
@@ -596,6 +610,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
         ep_sup = ep_sup_aux = 0.0
         n_sup = 0
         ep_cjepa = ep_cjepa_sim = ep_cjepa_std = ep_cjepa_cov = 0.0
+        ep_koleo = ep_koleo_d = 0.0
+        n_koleo = 0
         n_cjepa = 0
         ep_conflict = float("nan")
         ep_topq = 0.0          # diagnostic: targets in top-25% line saliency
@@ -860,6 +876,16 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             if l_cjepa is not None:
                 loss = loss + cfg.cjepa_weight * l_cjepa
 
+            # ─── KoLeo (--use_koleo 1): spread the pooled context features, computed PER context view ───
+            if use_koleo:
+                zk = ctx_embeds.mean(dim=1).reshape(n_views, B, -1)     # (views, B, D), view-major rows
+                ks = [koleo_loss(zk[v]) for v in range(n_views)]
+                l_koleo = torch.stack([k[0] for k in ks]).mean()
+                loss = loss + cfg.koleo_weight * l_koleo
+                ep_koleo += l_koleo.item()
+                ep_koleo_d += sum(k[1] for k in ks) / n_views
+                n_koleo += 1
+
             # ─── Gradient-conflict diagnostic on shared params ───
             # >0 complementary, ~0 orthogonal, <0 conflicting.
             if ((use_struct or use_sup) and cfg.log_conflict and n_bat == 0
@@ -891,6 +917,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
         ep_loss /= max(n_bat, 1)
         ep_var /= max(n_bat, 1)
+        ep_koleo /= max(n_koleo, 1)
+        ep_koleo_d /= max(n_koleo, 1)
         ep_a1 /= max(n_a1, 1)
         ep_a1_cos /= max(n_a1, 1)
         ep_a1_top1 /= max(n_a1, 1)
@@ -918,6 +946,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                   f"loss={ep_loss:.4f}  sim={sim:.3f}  "
                   f"var={ep_var:.4f}  lr={lr_now:.2e}  "
                   f"mom={momentum:.4f}  [{elapsed:.1f}s]")
+            if use_koleo:
+                print(f"           KoLeo: loss={ep_koleo:.4f}  mean_nn_dist={ep_koleo_d:.4f}")
             if use_a1:
                 print(f"           A1 (visible): loss={ep_a1:.4f}  "
                       f"cos={ep_a1_cos:.3f}  top1={ep_a1_top1:.3f}")
@@ -954,6 +984,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
             eval_entry = {"epoch": epoch, "loss": ep_loss, "sim": sim,
                           "var": ep_var}
+            if use_koleo:
+                eval_entry["koleo"] = ep_koleo
             if use_a1:
                 eval_entry["l_a1"] = ep_a1
                 eval_entry["a1_cos"] = ep_a1_cos
