@@ -146,6 +146,25 @@ def run_multi_seed(cfg, train_fns, out_path):
 
 
 
+# Multi-view / target settings: when given EXPLICITLY on the command line they are appended AFTER the
+# preset's own flags (argparse: last wins), so e.g.  --baselines palmjepa_mv --n_ctx_views 3  overrides
+# the preset's 5.  Not given -> the preset (or default) is used.
+_OVERRIDE_FLAGS = [("--n_targets", "n_targets"), ("--num_blocks", "num_blocks"),
+                   ("--n_ctx_views", "n_ctx_views"), ("--n_contexts", "n_ctx_views"),
+                   ("--ctx_view_mode", "ctx_view_mode"), ("--target_aug_strength", "target_aug_strength")]
+
+
+def _cli_overrides(cfg):
+    flags, seen = [], set()
+    for opt, dest in _OVERRIDE_FLAGS:
+        given = any(a == opt or a.startswith(opt + "=") for a in sys.argv[1:])
+        val = getattr(cfg, dest, None)
+        if given and val is not None and dest not in seen:
+            seen.add(dest)
+            flags += [f"--{dest}", str(val)]
+    return flags
+
+
 def _shared_flags(cfg):
     flags = []
     for name in SHARED_ARG_NAMES:
@@ -413,10 +432,8 @@ def run_all_baselines(cfg):
                 _v = getattr(cfg, _n, None)
                 if _v is not None:
                     sched_flags += [f"--{_n}", str(_v)]
-            if int(getattr(cfg, "n_ctx_views", 1) or 1) != 1:          # multi-view context (JEPA / Palm-JEPA)
-                sched_flags += ["--n_ctx_views", str(cfg.n_ctx_views)]
             cmd = [sys.executable, self_main] + shared + trunk_flag + sched_flags + spec["extra"] + \
-                  ["--output_name", out_name]
+                  _cli_overrides(cfg) + ["--output_name", out_name]
             cwd = here
         elif spec["script"] == "vicreg":
             cmd = [sys.executable, vicreg_main] + shared + spec["extra"] + \
