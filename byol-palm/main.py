@@ -245,7 +245,7 @@ def train_byol(cfg, train_loader, eval_dict, out_path):
     feature_extractor = FeatureExtractor(online_encoder)
     # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
     _ev = eval_from_ckpt(cfg, "byol", online_encoder, feature_extractor, build_cross_dataset_eval_dict,
-                         run_full_eval, out_path)
+                         run_full_eval, out_path, seen_eval_dict=eval_dict)
     if _ev is not None:
         return _ev
 

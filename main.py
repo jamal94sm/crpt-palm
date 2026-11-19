@@ -521,7 +521,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     feature_extractor = FeatureExtractor(target_encoder)
     # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
     _ev = eval_from_ckpt(cfg, "jepa", target_encoder, feature_extractor, build_cross_dataset_eval_dict,
-                         run_full_eval, out_path)
+                         run_full_eval, out_path, seen_eval_dict=eval_dict)
     if _ev is not None:
         return _ev
 
@@ -1091,7 +1091,7 @@ def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
     feature_extractor = model.backbone
     # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
     _ev = eval_from_ckpt(cfg, "compnet", model.backbone, feature_extractor, build_cross_dataset_eval_dict,
-                         run_full_eval, out_path)
+                         run_full_eval, out_path, seen_eval_dict=eval_dict)
     if _ev is not None:
         return _ev
 
@@ -1236,7 +1236,7 @@ def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
     feature_extractor = FeatModule(model)
     # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
     _ev = eval_from_ckpt(cfg, "vit_sup", model, feature_extractor, build_cross_dataset_eval_dict,
-                         run_full_eval, out_path, skip_prefixes=("classifier.",))
+                         run_full_eval, out_path, skip_prefixes=("classifier.",), seen_eval_dict=eval_dict)
     if _ev is not None:
         return _ev
 

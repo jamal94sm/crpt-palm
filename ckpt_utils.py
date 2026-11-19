@@ -100,11 +100,13 @@ def find_eval_ckpt(cfg, default_tag):
 
 
 def eval_from_ckpt(cfg, default_tag, module, feature_extractor, build_cross_fn, run_eval_fn,
-                   out_path, skip_prefixes=()):
+                   out_path, skip_prefixes=(), seen_eval_dict=None):
     """If --eval_ckpt_dir is set: load the saved weights into `module` (the same module that
     maybe_save_ckpt saved), run the cross-dataset evaluation (zero-shot + every --adapt_ratios
     k%) WITHOUT training, append the table to out_path and return a final-entry dict
     ({mean_rank1, mean_eer, <eval set>: {...}}) shaped like the training functions' result.
+    `seen_eval_dict` (the in-domain eval sets of the training run, e.g. seen_dom_seen_id) is
+    also evaluated and reported next to the cross-dataset sets.
     Returns None when --eval_ckpt_dir is not set (normal training run)."""
     path = find_eval_ckpt(cfg, default_tag)
     if path is None:
@@ -130,8 +132,11 @@ def eval_from_ckpt(cfg, default_tag, module, feature_extractor, build_cross_fn, 
         raise SystemExit("no cross-dataset evaluation sets: set the dataset directories "
                          "(--casia_dir/--xjtu_dir/--xpalm_dir, or --mode cross_dataset with --test_datasets)")
     results = run_eval_fn(feature_extractor, cross, cfg, tag="[ckpt-eval] ")
+    seen = {}
+    if seen_eval_dict:
+        seen = run_eval_fn(feature_extractor, seen_eval_dict, cfg, tag="[ckpt-eval seen] ")
     lines = [f" {'dataset':<24} {'R1':>8} {'EER':>8}"] + \
-            [f" {n:<24} {r['rank1']:>8.2f} {r['eer']:>8.2f}" for n, r in results.items()]
+            [f" {n:<24} {r['rank1']:>8.2f} {r['eer']:>8.2f}" for n, r in {**seen, **results}.items()]
     text = "\n".join(lines)
     print("\n" + text + "\n")
     os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
@@ -142,6 +147,7 @@ def eval_from_ckpt(cfg, default_tag, module, feature_extractor, build_cross_fn, 
     zs = [r for n, r in results.items() if not re.search(r"_(enr|dis)\d+$", n)] or list(results.values())
     entry = {"mean_rank1": sum(r["rank1"] for r in zs) / len(zs),       # mean over the zero-shot sets
              "mean_eer": sum(r["eer"] for r in zs) / len(zs)}
+    entry.update(seen)
     entry.update(results)
     return entry
 

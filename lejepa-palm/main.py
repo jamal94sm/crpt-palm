@@ -166,7 +166,7 @@ def train_lejepa(cfg, train_loader, eval_dict, out_path):
     feature_extractor = FeatureExtractor(encoder)
     # --eval_ckpt_dir: evaluate a saved backbone (cross-dataset + adapter), no training
     _ev = eval_from_ckpt(cfg, "lejepa", encoder, feature_extractor, build_cross_dataset_eval_dict,
-                         run_full_eval, out_path)
+                         run_full_eval, out_path, seen_eval_dict=eval_dict)
     if _ev is not None:
         return _ev
 
