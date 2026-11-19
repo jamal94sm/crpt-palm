@@ -121,6 +121,11 @@ def run_multi_seed(cfg, train_fns, out_path):
                               n_train_ids, train_id_map, out_path)
 
         per_run.append(_flatten_entry(final_entry))
+        import ckpt_utils as _ck
+        if _ck.was_stopped():
+            print(f"\n  ■ Stopped by request: the remaining {n_runs - i - 1} run(s) of this baseline are "
+                  f"skipped; summary over the {len(per_run)} completed run(s).\n")
+            break
 
     metric_keys = sorted(per_run[0].keys())
     summary = {key: compute_ci([r[key] for r in per_run if key in r], level=level)
@@ -485,9 +490,15 @@ def run_all_baselines(cfg):
                   ["--output_name", out_name]
             cwd = os.path.dirname(capi_main)
             
+        stop_path = os.path.join(os.path.abspath(cfg.output_dir), "STOP_CURRENT_BASELINE")
+        if os.path.exists(stop_path):
+            os.remove(stop_path)                                # stale stop request from an earlier baseline
         print(f"\n{'#'*80}\n  BASELINE: {spec['name']}")
-        print(f"  CMD: {' '.join(cmd)}\n{'#'*80}\n")
+        print(f"  CMD: {' '.join(cmd)}")
+        print(f"  To STOP this baseline now (keeps best/last checkpoints + results) and go to the next one:\n"
+              f"      touch {stop_path}\n{'#'*80}\n")
         child_env = dict(os.environ)
+        child_env["STOP_FILE"] = stop_path
         child_env["CKPT_KEY"] = spec["key"]                  # tag used in the checkpoint file name
         if getattr(cfg, "save_ckpt", None):
             child_env["SAVE_CKPT"] = ",".join(cfg.save_ckpt)
@@ -506,6 +517,8 @@ def run_all_baselines(cfg):
         if getattr(cfg, "eval_ckpt_which", None):
             child_env["EVAL_CKPT_WHICH"] = cfg.eval_ckpt_which
         subprocess.run(cmd, cwd=cwd, check=True, env=child_env)
+        if os.path.exists(stop_path):
+            os.remove(stop_path)                                # consumed: the next baseline runs normally
 
         results[spec["name"]] = _parse_summary_csv(out_file)
 

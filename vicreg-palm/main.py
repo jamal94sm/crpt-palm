@@ -28,7 +28,7 @@ from paired_dataset import PairedCASIADataset
 from models import Encoder, Expander, FeatureExtractor
 from vicreg_loss import vicreg_loss
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt, stop_requested
 
 
 def exclude_bias_and_norm(p):
@@ -240,6 +240,8 @@ def train_vicreg(cfg, train_loader, eval_dict, out_path):
     epochs_done, global_step = resume.load()
 
     for epoch in range(epochs_done + 1, cfg.epochs + 1):
+        if stop_requested(cfg, tracker):
+            break
         encoder.train()
         expander.train()
 

@@ -28,7 +28,7 @@ from models import DinoViT, DINOHead, FeatureExtractor
 from dino_loss import DINOLoss
 from multicrop_dataset import MultiCropDataset, multicrop_collate
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt, stop_requested
 
 def set_seed(seed):
     random.seed(seed)
@@ -229,6 +229,8 @@ def train_dino(cfg, train_loader, eval_dict, out_path):
     epochs_done, global_step = resume.load()
 
     for epoch in range(epochs_done, cfg.epochs):
+        if stop_requested(cfg, tracker):
+            break
         student_backbone.train()
         student_head.train()
         teacher_backbone.eval()

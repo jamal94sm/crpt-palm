@@ -27,7 +27,7 @@ from models import MaskedViT, MaskFeatHead, FeatureExtractor
 from hog import HOGGenerator
 from masking import batch_block_mask
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt, stop_requested
 
 def set_seed(seed):
     random.seed(seed)
@@ -199,6 +199,8 @@ def train_maskfeat(cfg, train_loader, eval_dict, out_path):
     epochs_done, global_step = resume.load()
 
     for epoch in range(epochs_done + 1, cfg.epochs + 1):
+        if stop_requested(cfg, tracker):
+            break
         encoder.train()
         head.train()
 

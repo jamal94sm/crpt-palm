@@ -25,7 +25,7 @@ from paired_dataset import PairedCASIADataset
 from models import Encoder, Expander, Predictor, FeatureExtractor, update_ema
 from byol_loss import byol_loss
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt, stop_requested
 
 def exclude_bias_and_norm(p):
     """Official filter (facebookresearch/vicreg, structurally identical to
@@ -263,6 +263,8 @@ def train_byol(cfg, train_loader, eval_dict, out_path):
     epochs_done, global_step = resume.load()
 
     for epoch in range(epochs_done + 1, cfg.epochs + 1):
+        if stop_requested(cfg, tracker):
+            break
         online_encoder.train()
         online_expander.train()
         predictor.train()

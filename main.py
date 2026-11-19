@@ -81,7 +81,7 @@ from line_masking import line_saliency, ridge_saliency, patchify_line_guided, ta
 #from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, context_consistency_loss
 from dmtjepa_loss import LocalAggregationHead, dmtjepa_targets, update_ema_head, DMTPredictor
 from ci_utils import run_multi_seed
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt, stop_requested
 
 CASIA_MEAN = [0.5, 0.5, 0.5]                    # matches dataset.py's Normalize()
 CASIA_STD  = [0.5, 0.5, 0.5]
@@ -586,6 +586,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     epochs_done, global_step = resume.load()
 
     for epoch in range(epochs_done + 1, cfg.epochs + 1):
+        if stop_requested(cfg, tracker):
+            break
         context_encoder.train()
         predictor.train()
         target_encoder.eval()
@@ -1188,6 +1190,8 @@ def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
     epochs_done, global_step = resume.load()
 
     for epoch in range(epochs_done + 1, cfg.epochs + 1):
+        if stop_requested(cfg, tracker):
+            break
         model.train()
         ep_loss, ep_correct, seen, n_bat = 0.0, 0, 0, 0
         t0 = time.time()
@@ -1333,6 +1337,8 @@ def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
     epochs_done, global_step = resume.load()
   
     for epoch in range(epochs_done + 1, cfg.epochs + 1):
+        if stop_requested(cfg, tracker):
+            break
         model.train()
         ep_loss, ep_correct, seen, n_bat = 0.0, 0, 0, 0
         t0 = time.time()

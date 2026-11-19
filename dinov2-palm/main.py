@@ -27,7 +27,7 @@ from dino_losses import DINOLoss, iBOTPatchLoss, KoLeoLoss
 from masking import make_mask_generator, build_ibot_masks
 from multicrop_dataset import MultiCropDataset, multicrop_collate
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt, stop_requested
 
 # ══════════════════ ecosystem plumbing (same as the other baselines) ══════════════════
 def set_seed(seed):
@@ -255,6 +255,8 @@ def train_dinov2(cfg, train_loader, eval_dict, out_path):
     epochs_done, global_step = resume.load()
 
     for epoch in range(epochs_done, cfg.epochs):
+        if stop_requested(cfg, tracker):
+            break
         student.train()
         teacher.eval()
         acc = {"dino_local": 0.0, "dino_global": 0.0, "koleo": 0.0, "ibot": 0.0, "total": 0.0, "ent": 0.0}

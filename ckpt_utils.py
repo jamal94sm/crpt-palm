@@ -152,6 +152,40 @@ def eval_from_ckpt(cfg, default_tag, module, feature_extractor, build_cross_fn, 
     return entry
 
 
+# ───────────────────────── "stop this baseline now" button ─────────────────────────
+# `touch <output_dir>/STOP_CURRENT_BASELINE`  (run_all_baselines prints the exact path).  At the start of
+# the next epoch the training loop stops, then the normal end-of-training steps run on the CURRENT
+# weights (best/last checkpoints, final test evaluation, results file) and run_all_baselines moves on to
+# the next baseline.  A stop is honoured only after the first evaluation, so best/last exist.
+_STOPPED = False
+STOP_NAME = "STOP_CURRENT_BASELINE"
+
+
+def stop_file(cfg):
+    return os.environ.get("STOP_FILE") or os.path.join(getattr(cfg, "output_dir", "."), STOP_NAME)
+
+
+def was_stopped():
+    return _STOPPED
+
+
+def stop_requested(cfg, tracker=None):
+    global _STOPPED
+    if _STOPPED:
+        return True
+    if not os.path.exists(stop_file(cfg)):
+        return False
+    if tracker is not None and getattr(tracker, "n_updates", 1) < 1:
+        if not getattr(tracker, "_stop_warned", False):
+            print("  ■ Stop requested -- waiting for the first evaluation (so best/last exist) ...")
+            tracker._stop_warned = True
+        return False
+    _STOPPED = True
+    print(f"\n  ■ STOP requested ({stop_file(cfg)}): ending training of this baseline now; "
+          f"saving checkpoints and results from the current weights.\n")
+    return True
+
+
 class BestTracker:
     """--ckpt_select last|best, --best_metric eer|r1.
     'best' = epoch with the best mean EER (or R1) over the TRAINING dataset/domain
@@ -159,6 +193,7 @@ class BestTracker:
 
     def __init__(self, cfg, default_tag=None, skip_prefixes=()):
         self.cfg = cfg
+        self.n_updates = 0
         self.select = _opt(cfg, "ckpt_select", "CKPT_SELECT", "last")
         self.metric = _opt(cfg, "best_metric", "BEST_METRIC", "eer")
         self.score = self.entry = self.state = None
@@ -192,6 +227,7 @@ class BestTracker:
 
     def update(self, eval_results, eval_entry, module):
         """Call right after eval_history.append(...)."""
+        self.n_updates += 1
         if self.select not in ("best", "both") or not eval_results:
             return
         s = self._score(eval_results)

@@ -25,7 +25,7 @@ from models import LeJepaEncoder, FeatureExtractor
 from sigreg_loss import SIGReg, lejepa_prediction_loss
 from multicrop_dataset import MultiCropDataset, multicrop_collate
 from evaluate import run_full_eval
-from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt
+from ckpt_utils import maybe_save_ckpt, BestTracker, Resumable, eval_from_ckpt, stop_requested
 
 # ══════════════════ ecosystem plumbing (same as every other baseline) ══════════════════
 def set_seed(seed):
@@ -182,6 +182,8 @@ def train_lejepa(cfg, train_loader, eval_dict, out_path):
     epochs_done, global_step = resume.load()
 
     for epoch in range(epochs_done, cfg.epochs):
+        if stop_requested(cfg, tracker):
+            break
         encoder.train()
         ep_pred = ep_sig = ep_total = 0.0
         n_bat, t0 = 0, time.time()
