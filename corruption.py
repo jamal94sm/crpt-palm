@@ -150,3 +150,15 @@ def corrupt_images(images, cfg, mean, std):
             x = fns[name](x, m, cfg)
 
     return _renorm(x, mean, std)
+
+
+def jitter_images(images, strength, mean, std):
+    """Mild per-sample photometric jitter (brightness, contrast, gamma, each U(1-a, 1+a)) for the TEACHER
+    views (--target_aug_strength a). images: (B,3,H,W) normalized -> same shape."""
+    x = _denorm(images, mean, std)
+    B = x.size(0)
+    u = lambda: 1.0 + (torch.rand(B, 1, 1, 1, device=x.device) * 2 - 1) * strength
+    mu = x.mean(dim=(1, 2, 3), keepdim=True)
+    x = ((x - mu) * u() + mu) * u()
+    x = x.clamp(1e-3, 1.0).pow(u())
+    return _renorm(x.clamp(0, 1), mean, std)

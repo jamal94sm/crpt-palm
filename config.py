@@ -241,9 +241,18 @@ def get_cfg(args=None):
     p.add_argument("--embed_dim", type=int, default=256)
     p.add_argument("--num_patches", type=int, default=8,
                    help="Grid size (8 → 8×8=64 patches for 112px)")
-    p.add_argument("--num_blocks", type=int, default=2,
-                   help="Number of target mask blocks")
-    p.add_argument("--n_ctx_views", type=int, default=1,
+    p.add_argument("--num_blocks", "--n_targets", dest="num_blocks", type=int, default=2,
+                   help="Number of target mask blocks = M target views of the clean image "
+                        "(DINOv2-style alias: --n_targets M)")
+    p.add_argument("--ctx_view_mode", default="both", choices=["both", "mask", "corrupt"],
+                   help="What differs between the --n_ctx_views context views: both = own context mask AND "
+                        "own corruption (default); mask = own context mask, one shared corruption draw; "
+                        "corrupt = the SAME context patches, own corruption per view (needs --use_corruption 1).")
+    p.add_argument("--target_aug_strength", type=float, default=0.0,
+                   help="a > 0: every target view (block) gets its own mild photometric jitter "
+                        "(brightness/contrast/gamma in 1 +- a) of the TEACHER input; 0 = clean teacher, "
+                        "one shared pass (default, the standard method).")
+    p.add_argument("--n_ctx_views", "--n_contexts", dest="n_ctx_views", type=int, default=1,
                    help="Context views per image (JEPA / Palm-JEPA only). Each view gets its own context mask "
                         "and its own random corruption; all views share the target blocks and the single "
                         "teacher pass; losses are averaged over views. 1 = standard (unchanged) training.")

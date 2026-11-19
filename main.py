@@ -38,6 +38,17 @@ baseline exactly):
                         context mask + own corruption per view, shared target
                         blocks and teacher pass, losses averaged over views.
                         V = 1 (default) is the standard single-view training.
+  --ctx_view_mode both|mask|corrupt : what differs between the V context views:
+                        both = own context mask AND own corruption (default),
+                        mask = own context mask, ONE shared corruption draw,
+                        corrupt = SAME context patches, own corruption per view.
+  --n_targets M / --n_contexts N : DINOv2-style naming of --num_blocks (M target
+                        blocks, each one "target view" of the clean image) and
+                        --n_ctx_views (N context views); every context view
+                        predicts every target -> M x N pairs, loss averaged.
+  --target_aug_strength a : (default 0) each target view gets its own mild
+                        photometric jitter of the teacher input (DINOv2-style
+                        teacher views); 0 = clean teacher, one shared pass.
 
 """
 
@@ -60,7 +71,7 @@ from models import (ContextEncoder, TargetEncoder, Predictor,
                     FeatModule, StructureHead, UncertaintyWeighting)
 
 from evaluate import run_full_eval
-from corruption import corrupt_images
+from corruption import corrupt_images, jitter_images
 from gabor import GaborBank, patch_energy_descriptor, sanity_report
 from struct_targets import build_struct_target
 from struct_loss import structure_loss, grad_conflict_cosine
@@ -473,8 +484,21 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
         if bad:
             raise SystemExit(f"--n_ctx_views {n_views} is only implemented for the standard predictor "
                              f"(JEPA / Palm-JEPA); not supported with: {', '.join(bad)}")
-        print(f"  Context views per image: {n_views} (shared target blocks and teacher pass, "
-              f"independent corruption + context mask per view, losses averaged over views)")
+        _vm = getattr(cfg, "ctx_view_mode", "both")
+        if _vm in ("corrupt", "both") and not getattr(cfg, "use_corruption", 0):
+            if _vm == "corrupt":
+                raise SystemExit("--ctx_view_mode corrupt needs --use_corruption 1 (otherwise all views are identical)")
+        _what = {"both": "independent corruption + context mask per view",
+                 "mask": "independent context mask per view, ONE shared corruption draw",
+                 "corrupt": "SAME context patches, independent corruption per view"}[_vm]
+        print(f"  Context views per image: {n_views} ({_what}; shared target blocks and teacher pass; "
+              f"losses averaged over views)")
+    _tag = float(getattr(cfg, "target_aug_strength", 0.0) or 0.0)
+    if _tag > 0 and use_dmtjepa:
+        raise SystemExit("--target_aug_strength > 0 is not supported with DMT-JEPA")
+    print(f"  Targets x contexts: M={cfg.num_blocks} target views (blocks) x N={n_views} context views "
+          f"= {cfg.num_blocks * n_views} (context, target) pairs per image, loss averaged over pairs"
+          + (f"; teacher jitter {_tag}" if _tag > 0 else "; clean teacher"))
     print(f"  Corruption: {'ON' if getattr(cfg, 'use_corruption', 0) else 'OFF'}"
           f"  Structural: {'ON' if use_struct else 'OFF'}"
           f"  Supervision: {'ON' if use_sup else 'OFF'}"
@@ -626,15 +650,22 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             # Every view shares the SAME target blocks (and so the same teacher targets) but gets its own
             # context mask and its own random corruption. V = 1 leaves everything exactly as before.
             Bv = B * n_views
+            _vm = getattr(cfg, "ctx_view_mode", "both")
             if n_views > 1:
-                ctx_masks = [extra_context_masks(ctx_masks[0], tgt_masks, cfg.num_patches,
-                                                 tuple(cfg.ctx_ratio), n_views, device=cfg.device)]
+                if _vm == "corrupt":        # SAME context patches in every view
+                    ctx_masks = [ctx_masks[0].repeat(n_views, 1)]
+                else:                       # "both" / "mask": own context block per view
+                    ctx_masks = [extra_context_masks(ctx_masks[0], tgt_masks, cfg.num_patches,
+                                                     tuple(cfg.ctx_ratio), n_views, device=cfg.device)]
                 tgt_masks = [t.repeat(n_views, 1) for t in tgt_masks]
 
             if cfg.use_corruption:
                 if n_views > 1:
-                    images_ctx = torch.cat([corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD)
-                                            for _ in range(n_views)], dim=0)
+                    if _vm == "mask":       # one corruption draw shared by all views
+                        images_ctx = corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD).repeat(n_views, 1, 1, 1)
+                    else:                   # "both" / "corrupt": independent draw per view
+                        images_ctx = torch.cat([corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD)
+                                                for _ in range(n_views)], dim=0)
                 else:
                     images_ctx = corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD)
             else:
@@ -659,7 +690,16 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                     dmt_valid = torch.cat(
                         [v.repeat(len(ctx_masks), 1) for v in dmt_valid], dim=0)
                 else:
-                    tgt_embeds = apply_masks(tgt_full, tgt_masks)
+                    if _tag > 0:            # target view m = own photometric jitter of the teacher input
+                        parts = []
+                        for _m in range(len(tgt_masks)):
+                            tm = target_encoder(jitter_images(images, _tag, CASIA_MEAN, CASIA_STD))
+                            if n_views > 1:
+                                tm = tm.repeat(n_views, 1, 1)
+                            parts.append(apply_masks(tm, [tgt_masks[_m]]))
+                        tgt_embeds = torch.cat(parts, dim=0)
+                    else:
+                        tgt_embeds = apply_masks(tgt_full, tgt_masks)
                     tgt_embeds = repeat_interleave_batch(
                         tgt_embeds, Bv, repeat=len(ctx_masks))
                     dmt_valid = None
