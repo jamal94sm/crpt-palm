@@ -241,15 +241,20 @@ def get_cfg(args=None):
     p.add_argument("--embed_dim", type=int, default=256)
     p.add_argument("--num_patches", type=int, default=8,
                    help="Grid size (8 → 8×8=64 patches for 112px)")
-    p.add_argument("--num_blocks", "--n_targets", dest="num_blocks", type=int, default=2,
-                   help="Number of target mask blocks = M target views of the clean image "
-                        "(DINOv2-style alias: --n_targets M)")
+    p.add_argument("--num_blocks", type=int, default=2,
+                   help="Number of target mask blocks PER target view")
+    p.add_argument("--n_targets", type=int, default=1,
+                   help="M = number of target views (DINOv2-style teacher views) of the clean image. Each "
+                        "target view has its own --num_blocks random target blocks (own teacher pass when "
+                        "--target_aug_strength > 0); the context excludes the blocks of ALL target views; "
+                        "every context view predicts every block. Total target blocks = n_targets x "
+                        "num_blocks. 1 = standard.")
     p.add_argument("--ctx_view_mode", default="both", choices=["both", "mask", "corrupt"],
                    help="What differs between the --n_ctx_views context views: both = own context mask AND "
                         "own corruption (default); mask = own context mask, one shared corruption draw; "
                         "corrupt = the SAME context patches, own corruption per view (needs --use_corruption 1).")
     p.add_argument("--target_aug_strength", type=float, default=0.0,
-                   help="a > 0: every target view (block) gets its own mild photometric jitter "
+                   help="a > 0: every target view gets its own mild photometric jitter "
                         "(brightness/contrast/gamma in 1 +- a) of the TEACHER input; 0 = clean teacher, "
                         "one shared pass (default, the standard method).")
     p.add_argument("--n_ctx_views", "--n_contexts", dest="n_ctx_views", type=int, default=1,

@@ -42,10 +42,10 @@ baseline exactly):
                         both = own context mask AND own corruption (default),
                         mask = own context mask, ONE shared corruption draw,
                         corrupt = SAME context patches, own corruption per view.
-  --n_targets M / --n_contexts N : DINOv2-style naming of --num_blocks (M target
-                        blocks, each one "target view" of the clean image) and
-                        --n_ctx_views (N context views); every context view
-                        predicts every target -> M x N pairs, loss averaged.
+  --n_targets M / --n_contexts N : DINOv2-style: M target views of the clean image,
+                        each with its own --num_blocks target blocks, and N
+                        context views (= --n_ctx_views); every context view
+                        predicts every target block -> M x num_blocks x N, loss averaged.
   --target_aug_strength a : (default 0) each target view gets its own mild
                         photometric jitter of the teacher input (DINOv2-style
                         teacher views); 0 = clean teacher, one shared pass.
@@ -433,7 +433,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     use_cjepa = bool(getattr(cfg, "use_cjepa_reg", False))
     cjepa_projector = None
     if use_cjepa:
-        if cfg.num_blocks < 2:
+        if cfg.num_blocks * int(getattr(cfg, "n_targets", 1) or 1) < 2:
             raise SystemExit("--use_cjepa_reg 1 requires --num_blocks >= 2 "
                               "(the regularizer compares pairs of target blocks).")
         cjepa_projector = CJEPAProjector(
@@ -475,6 +475,10 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
               f"sim={cfg.cjepa_sim_weight} std={cfg.cjepa_std_weight} "
               f"cov={cfg.cjepa_cov_weight} blocks={cfg.num_blocks}")
 
+    n_targets = int(getattr(cfg, "n_targets", 1) or 1)
+    if n_targets < 1:
+        raise SystemExit("--n_targets must be >= 1")
+    n_tb = cfg.num_blocks * n_targets            # total target blocks (all target views)
     n_views = int(getattr(cfg, "n_ctx_views", 1) or 1)
     if n_views < 1:
         raise SystemExit("--n_ctx_views must be >= 1")
@@ -496,8 +500,9 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     _tag = float(getattr(cfg, "target_aug_strength", 0.0) or 0.0)
     if _tag > 0 and use_dmtjepa:
         raise SystemExit("--target_aug_strength > 0 is not supported with DMT-JEPA")
-    print(f"  Targets x contexts: M={cfg.num_blocks} target views (blocks) x N={n_views} context views "
-          f"= {cfg.num_blocks * n_views} (context, target) pairs per image, loss averaged over pairs"
+    print(f"  Targets x contexts: M={n_targets} target views x {cfg.num_blocks} blocks = {n_tb} target blocks; "
+          f"N={n_views} context views -> {n_tb * n_views} (context, target-block) pairs per image, "
+          f"loss averaged over pairs"
           + (f"; teacher jitter {_tag}" if _tag > 0 else "; clean teacher"))
     print(f"  Corruption: {'ON' if getattr(cfg, 'use_corruption', 0) else 'OFF'}"
           f"  Structural: {'ON' if use_struct else 'OFF'}"
@@ -629,14 +634,14 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
             if use_line_mask:
                 ctx_masks, tgt_masks = patchify_line_guided(
-                    saliency, B, cfg.num_patches, cfg.num_blocks,
+                    saliency, B, cfg.num_patches, n_tb,
                     trg_ratio=tuple(cfg.trg_ratio),
                     ctx_ratio=tuple(cfg.ctx_ratio),
                     eps=cfg.line_mask_eps, tau=cfg.line_mask_tau,
                     device=cfg.device)
             else:
                 ctx_masks, tgt_masks = patchify(
-                    B, cfg.num_patches, cfg.num_blocks,
+                    B, cfg.num_patches, n_tb,
                     trg_ratio=tuple(cfg.trg_ratio),
                     ctx_ratio=tuple(cfg.ctx_ratio),
                     device=cfg.device)
@@ -692,11 +697,11 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                 else:
                     if _tag > 0:            # target view m = own photometric jitter of the teacher input
                         parts = []
-                        for _m in range(len(tgt_masks)):
+                        for _m in range(n_targets):
                             tm = target_encoder(jitter_images(images, _tag, CASIA_MEAN, CASIA_STD))
                             if n_views > 1:
                                 tm = tm.repeat(n_views, 1, 1)
-                            parts.append(apply_masks(tm, [tgt_masks[_m]]))
+                            parts.append(apply_masks(tm, tgt_masks[_m * cfg.num_blocks:(_m + 1) * cfg.num_blocks]))
                         tgt_embeds = torch.cat(parts, dim=0)
                     else:
                         tgt_embeds = apply_masks(tgt_full, tgt_masks)
@@ -740,7 +745,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             l_cjepa = None
             if use_cjepa:
                 l_cjepa, s_cjepa = cjepa_regularizer(
-                    pred_embeds, cfg.num_blocks, B, cjepa_projector,
+                    pred_embeds, n_tb, B, cjepa_projector,
                     sim_weight=cfg.cjepa_sim_weight, std_weight=cfg.cjepa_std_weight,
                     cov_weight=cfg.cjepa_cov_weight, gamma=cfg.cjepa_gamma, eps=cfg.cjepa_eps)
                 ep_cjepa += l_cjepa.item()
@@ -784,7 +789,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                             f"A2 misalignment: t_a2 {tuple(t_a2.shape)} vs "
                             f"struct_hidden {tuple(struct_hidden.shape)}")
                     l_a2, s_a2 = _per_view_structure_loss(
-                        struct_head_a2(struct_hidden), t_a2, n_views, cfg.num_blocks,
+                        struct_head_a2(struct_hidden), t_a2, n_views, n_tb,
                         kind=cfg.loss_a2,
                         temperature=cfg.infonce_temp,
                         max_n=cfg.infonce_max_n)
