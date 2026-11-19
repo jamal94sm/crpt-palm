@@ -250,6 +250,7 @@ def train_simsiam(cfg, train_loader, eval_dict, out_path):
                 eval_entry[name] = r
             eval_history.append(eval_entry)
             tracker.update(eval_results, eval_entry, encoder)
+            tracker.cross_eval(feature_extractor, eval_entry)
 
             if mean_eer < best_eval["mean_eer"]:
                 best_eval = {"epoch": epoch, "mean_rank1": mean_r1,

@@ -608,6 +608,13 @@ def get_cfg(args=None):
              "(the plain ckpt file = last). With 'best'/'both' the *_best.pth (and, "
              "for 'both', *_last.pth) is also (over)written at EVERY --eval_every "
              "evaluation, so a killed run keeps the latest files.")
+    p.add_argument("--cross_eval_every_eval", type=int, default=None, choices=[0, 1],
+        help="1 = at every --eval_every evaluation of the training/seen sets ALSO evaluate "
+             "the cross-dataset (test) sets (zero-shot) with the current model. Printed in the "
+             "log, stored in eval_history, and appended to "
+             "{output_dir}/cross_eval_history_{baseline}_train_{label}.csv. For analysis only: "
+             "it never affects which epoch is selected as best. Costs one extra test-set "
+             "evaluation per eval. Default 0.")
     p.add_argument("--best_metric", type=str, default=None, choices=["eer", "r1"],
         help="Criterion for --ckpt_select best: lowest mean EER (default) or "
              "highest mean Rank-1, on the training-set eval sets.")

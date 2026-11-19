@@ -297,6 +297,7 @@ def train_dino(cfg, train_loader, eval_dict, out_path):
                 eval_entry[name] = r
             eval_history.append(eval_entry)
             tracker.update(eval_results, eval_entry, student_backbone)
+            tracker.cross_eval(feature_extractor, eval_entry)
 
             if mean_eer < best_eval["mean_eer"]:
                 best_eval = {"epoch": epoch_disp, "mean_rank1": mean_r1, "mean_eer": mean_eer}

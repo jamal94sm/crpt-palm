@@ -943,6 +943,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                 eval_entry[name] = r
             eval_history.append(eval_entry)
             tracker.update(eval_results, eval_entry, target_encoder)
+            tracker.cross_eval(feature_extractor, eval_entry)
           
             if mean_r1 > best_eval["mean_rank1"]:
                 best_eval = {"epoch": epoch, "mean_rank1": mean_r1,
@@ -1156,6 +1157,7 @@ def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
                 eval_entry[name] = r
             eval_history.append(eval_entry)
             tracker.update(eval_results, eval_entry, model.backbone)
+            tracker.cross_eval(feature_extractor, eval_entry)
 
             if mean_eer < best_eval["mean_eer"]:        # track MIN EER
                 best_eval = {"epoch": epoch, "mean_rank1": mean_r1,
@@ -1300,6 +1302,7 @@ def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
                 eval_entry[name] = r
             eval_history.append(eval_entry)
             tracker.update(eval_results, eval_entry, model)
+            tracker.cross_eval(feature_extractor, eval_entry)
           
             if mean_eer < best_eval["mean_eer"]:        # track MIN EER
                 best_eval = {"epoch": epoch, "mean_rank1": mean_r1,

@@ -301,6 +301,7 @@ def train_capi(cfg, train_loader, eval_dict, out_path):
             entry.update(eval_results)
             eval_history.append(entry)
             tracker.update(eval_results, entry, teacher_backbone)
+            tracker.cross_eval(feature_extractor, entry)
             if mean_eer < best_eval["mean_eer"]:
                 best_eval = {"epoch": ep, "mean_rank1": mean_r1, "mean_eer": mean_eer}
                 print(f" \u2605 New best EER={mean_eer:.2f}% (R1={mean_r1:.2f}%)")
