@@ -124,7 +124,7 @@ BASELINE_SPECS = [
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce", "--w_a2", "0.3",
                "--struct_target", "ridge",
-               "--n_targets", "2", "--n_ctx_views", "5", "--ctx_view_mode", "both",
+               "--n_targets", "2", "--n_ctx_views", "10", "--ctx_view_mode", "both",
                "--use_koleo", "1", "--koleo_weight", "0.1"]},
     # ─── corruption-type ablation: Palm-JEPA with a different corruption group (type 4 'current' = palmjepa) ───
     {"key": "palmjepa_c_lighting", "name": "Palm-JEPA (Lighting corruption)", "script": "self",
