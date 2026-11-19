@@ -107,6 +107,18 @@ BASELINE_SPECS = [
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
                "--w_a2", "0.3", "--struct_target", "random"]},
+    # ─── multi-view Palm-JEPA (M=2 target views x 2 blocks, N=5 context views, own mask + own corruption) ───
+    {"key": "palmjepa_mv", "name": "Palm-JEPA multi-view (Gabor target)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce", "--w_a2", "0.3",
+               "--n_targets", "2", "--n_ctx_views", "5", "--ctx_view_mode", "both"]},
+    {"key": "palmjepa_ridge_mv", "name": "Palm-JEPA multi-view (Hessian ridge target)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce", "--w_a2", "0.3",
+               "--struct_target", "ridge",
+               "--n_targets", "2", "--n_ctx_views", "5", "--ctx_view_mode", "both"]},
     # ─── corruption-type ablation: Palm-JEPA with a different corruption group (type 4 'current' = palmjepa) ───
     {"key": "palmjepa_c_lighting", "name": "Palm-JEPA (Lighting corruption)", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "lighting",
