@@ -249,7 +249,7 @@ def train_dinov2(cfg, train_loader, eval_dict, out_path):
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
     n_skipped = 0
 
-    tracker = BestTracker(cfg)
+    tracker = BestTracker(cfg, "dinov2")
     resume = Resumable(cfg, "dinov2", modules={"student": student, "teacher": teacher, "dino_loss": dino_loss, "ibot_loss": ibot_loss},
                        optims={"opt": opt})
     epochs_done, global_step = resume.load()

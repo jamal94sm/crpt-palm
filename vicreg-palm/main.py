@@ -234,7 +234,7 @@ def train_vicreg(cfg, train_loader, eval_dict, out_path):
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
 
     global_step = 0
-    tracker = BestTracker(cfg)
+    tracker = BestTracker(cfg, "vicreg")
     resume = Resumable(cfg, "vicreg", modules={"encoder": encoder, "expander": expander},
                        optims={"opt": opt})
     epochs_done, global_step = resume.load()

@@ -151,11 +151,32 @@ class BestTracker:
     'best' = epoch with the best mean EER (or R1) over the TRAINING dataset/domain
     eval sets (names starting with 'seen_dom'); unseen sets never influence it."""
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, default_tag=None, skip_prefixes=()):
+        self.cfg = cfg
         self.select = _opt(cfg, "ckpt_select", "CKPT_SELECT", "last")
         self.metric = _opt(cfg, "best_metric", "BEST_METRIC", "eer")
         self.score = self.entry = self.state = None
         self.label = ""
+        # per-evaluation saving (same file names as the end-of-training ones)
+        self.tag = os.environ.get("CKPT_KEY") or default_tag
+        self.skip_prefixes = tuple(skip_prefixes)
+
+    def _save_now(self, which, state, epoch):
+        """Write ckpt_{tag}_train_{label}_{best|last}.pth right now (atomic: tmp + rename, so a
+        killed run never leaves a half-written file). Only for baselines listed in --save_ckpt,
+        and only for the first seed of a multi-seed run (same rule as maybe_save_ckpt)."""
+        cfg, wanted = self.cfg, _wanted(self.cfg)
+        if not self.tag or not wanted or ("all" not in wanted and _norm(self.tag) not in wanted):
+            return
+        label = _train_label(cfg)
+        if (self.tag, label) in _SAVED:
+            return
+        os.makedirs(cfg.output_dir, exist_ok=True)
+        path = os.path.join(cfg.output_dir, f"ckpt_{self.tag}_train_{label}_{which}.pth")
+        sd = {k: v for k, v in state.items() if not k.startswith(self.skip_prefixes)}
+        torch.save(sd, path + ".tmp")
+        os.replace(path + ".tmp", path)
+        print(f"    Saved {which.upper()} checkpoint (epoch {epoch}): {path}")
 
     def _score(self, eval_results):
         keys = [k for k in eval_results if k.startswith("seen_dom")] or list(eval_results)
@@ -174,6 +195,10 @@ class BestTracker:
             val = s if self.metric == "r1" else -s
             print(f"    ◆ best-so-far for model selection ({self.metric.upper()} on training "
                   f"set = {val:.2f}%) -> epoch {eval_entry['epoch']}")
+            self._save_now("best", self.state, eval_entry["epoch"])      # --ckpt_select best|both
+        if self.select == "both":                                        # LAST = this evaluation
+            self._save_now("last", {k: v.detach().cpu() for k, v in module.state_dict().items()},
+                           eval_entry["epoch"])
 
     def finalize(self, module, eval_history):
         """After the loop, BEFORE maybe_save_ckpt / cross-dataset eval. Restores the

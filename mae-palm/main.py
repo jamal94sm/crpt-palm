@@ -183,7 +183,7 @@ def train_mae(cfg, train_loader, eval_dict, out_path):
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
     global_step = 0
 
-    tracker = BestTracker(cfg)
+    tracker = BestTracker(cfg, "mae")
     resume = Resumable(cfg, "mae", modules={"encoder": encoder, "decoder": decoder},
                        optims={"opt": opt})
     epochs_done, global_step = resume.load()

@@ -257,7 +257,7 @@ def train_byol(cfg, train_loader, eval_dict, out_path):
     global_step = 0
     momentum = cfg.ema_start
 
-    tracker = BestTracker(cfg)
+    tracker = BestTracker(cfg, "byol")
     resume = Resumable(cfg, "byol", modules={"online_encoder": online_encoder, "online_expander": online_expander, "predictor": predictor, "target_encoder": target_encoder, "target_expander": target_expander},
                        optims={"opt": opt})
     epochs_done, global_step = resume.load()

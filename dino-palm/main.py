@@ -223,7 +223,7 @@ def train_dino(cfg, train_loader, eval_dict, out_path):
     eval_history = []
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
 
-    tracker = BestTracker(cfg)
+    tracker = BestTracker(cfg, "dino")
     resume = Resumable(cfg, "dino", modules={"student_backbone": student_backbone, "teacher_backbone": teacher_backbone, "student_head": student_head, "teacher_head": teacher_head, "dino_loss": dino_loss},
                        optims={"opt": opt})
     epochs_done, global_step = resume.load()

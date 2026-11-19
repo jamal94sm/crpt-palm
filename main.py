@@ -530,7 +530,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     eval_history = []
     best_eval = {"epoch": 0, "mean_rank1": 0}
 
-    tracker = BestTracker(cfg)
+    tracker = BestTracker(cfg, "jepa")
     resume = Resumable(
         cfg, "jepa",
         modules={"context_encoder": context_encoder, "target_encoder": target_encoder,
@@ -1104,7 +1104,7 @@ def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
     eval_history = []
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
 
-    tracker = BestTracker(cfg)
+    tracker = BestTracker(cfg, "compnet")
     resume = Resumable(cfg, "compnet", modules={"model": model},
                        optims={"opt": opt}, scheds={"scheduler": scheduler})
     epochs_done, global_step = resume.load()
@@ -1248,7 +1248,7 @@ def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
     global_step = 0
     eval_history = []
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
-    tracker = BestTracker(cfg)
+    tracker = BestTracker(cfg, "vit_sup", skip_prefixes=("classifier.",))
     resume = Resumable(cfg, "vit_sup", modules={"model": model},
                        optims={"opt": opt}, scheds={"scheduler": scheduler})
     epochs_done, global_step = resume.load()

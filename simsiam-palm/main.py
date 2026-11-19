@@ -189,7 +189,7 @@ def train_simsiam(cfg, train_loader, eval_dict, out_path):
     eval_history = []
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
 
-    tracker = BestTracker(cfg)
+    tracker = BestTracker(cfg, "simsiam")
     resume = Resumable(cfg, "simsiam", modules={"encoder": encoder, "expander": expander, "predictor": predictor},
                        optims={"opt": opt})
     epochs_done, global_step = resume.load()

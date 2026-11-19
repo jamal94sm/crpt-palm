@@ -605,7 +605,9 @@ def get_cfg(args=None):
              "'last' = final-epoch model (default), 'best' = the epoch that is best "
              "on the TRAINING dataset/domain eval sets (see --best_metric), "
              "'both' = report the last epoch but save *_best.pth AND *_last.pth "
-             "(the plain ckpt file = last).")
+             "(the plain ckpt file = last). With 'best'/'both' the *_best.pth (and, "
+             "for 'both', *_last.pth) is also (over)written at EVERY --eval_every "
+             "evaluation, so a killed run keeps the latest files.")
     p.add_argument("--best_metric", type=str, default=None, choices=["eer", "r1"],
         help="Criterion for --ckpt_select best: lowest mean EER (default) or "
              "highest mean Rank-1, on the training-set eval sets.")

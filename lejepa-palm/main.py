@@ -176,7 +176,7 @@ def train_lejepa(cfg, train_loader, eval_dict, out_path):
     best_eval = {"epoch": 0, "mean_rank1": 0.0, "mean_eer": float("inf")}
     global_step = 0
 
-    tracker = BestTracker(cfg)
+    tracker = BestTracker(cfg, "lejepa")
     resume = Resumable(cfg, "lejepa", modules={"encoder": encoder, "sigreg": sigreg},
                        optims={"opt": opt})
     epochs_done, global_step = resume.load()
