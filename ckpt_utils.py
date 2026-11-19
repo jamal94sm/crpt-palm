@@ -207,15 +207,13 @@ class BestTracker:
                            eval_entry["epoch"])
 
     def cross_eval(self, feature_extractor, eval_entry):
-        """--cross_eval_every_eval 1: right after update(), also run the cross-dataset
-        (test) evaluation with the current model, at every --eval_every epoch. Zero-shot
+        """Right after update(), also run the cross-dataset (test) evaluation with the
+        current model, at every --eval_every epoch (same trigger as the seen-set eval). Zero-shot
         sets only (adaptation sets are left to the end-of-training evaluation). Never
         influences model selection. Results go to eval_entry['cross_eval'], the log and
         {output_dir}/cross_eval_history_{tag}_train_{label}.csv (is_best = this epoch is
         the best-so-far training-set epoch, i.e. the one saved as *_best.pth)."""
         cfg = self.cfg
-        if str(_opt(cfg, "cross_eval_every_eval", "CROSS_EVAL_EVERY_EVAL", "0")).lower() in ("0", "false"):
-            return None
         import re
         if not hasattr(self, "_cross_dict"):
             from dataset import build_cross_dataset_eval_dict
