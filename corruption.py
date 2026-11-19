@@ -89,6 +89,28 @@ _FN = {
 }
 
 
+CORRUPTION_TYPES = ["current", "lighting", "surface", "device", "all"]
+
+
+def corruption_set(ctype, mix_prob):
+    """(ordered operator names, {name: fn(xs, mask, cfg)}, per-operator switch-on probability).
+    current = the 7 original operators (unchanged). lighting / surface / device = the groups of
+    corruption_types.py. all = surface -> lighting -> device -> current (physical order), every
+    operator switched on independently with mix_prob scaled so the EXPECTED number of operators per
+    corrupted sample stays that of 'current' (mix_prob x 7)."""
+    if ctype == "current":
+        return CORRUPTION_NAMES, _FN, mix_prob
+    import corruption_types as T
+    fns = dict(T.FN)
+    if ctype in T.GROUPS:
+        return T.GROUPS[ctype], fns, mix_prob
+    if ctype == "all":
+        names = T.SURFACE + T.LIGHTING + T.DEVICE + CORRUPTION_NAMES
+        fns.update(_FN)
+        return names, fns, min(1.0, mix_prob * len(CORRUPTION_NAMES) / len(names))
+    raise ValueError(f"unknown corruption_type {ctype!r}; choose from {CORRUPTION_TYPES}")
+
+
 def corrupt_images(images, cfg, mean, std):
     """
     images: (B,3,H,W) normalized tensor (context view, before context_encoder).
@@ -108,21 +130,23 @@ def corrupt_images(images, cfg, mean, std):
     if not corrupt_mask.any():
         return images
 
-    n = len(CORRUPTION_NAMES)
+    ctype = getattr(cfg, "corruption_type", "current")
+    names, fns, mix_prob = corruption_set(ctype, getattr(cfg, "mix_prob", 0.4))
+    n = len(names)
     if getattr(cfg, "corruption_mode", "mixed") == "single":
         chosen = torch.randint(0, n, (B,), device=device)
-        type_masks = {name: corrupt_mask & (chosen == i) for i, name in enumerate(CORRUPTION_NAMES)}
+        type_masks = {name: corrupt_mask & (chosen == i) for i, name in enumerate(names)}
     else:
-        include = torch.rand(B, n, device=device) < getattr(cfg, "mix_prob", 0.4)
+        include = torch.rand(B, n, device=device) < mix_prob
         none_sel = ~include.any(dim=1)
         if none_sel.any():
             forced = torch.randint(0, n, (int(none_sel.sum()),), device=device)
             include[none_sel, forced] = True
-        type_masks = {name: corrupt_mask & include[:, i] for i, name in enumerate(CORRUPTION_NAMES)}
+        type_masks = {name: corrupt_mask & include[:, i] for i, name in enumerate(names)}
 
-    for name in CORRUPTION_NAMES:
+    for name in names:
         m = type_masks[name]
         if m.any():
-            x = _FN[name](x, m, cfg)
+            x = fns[name](x, m, cfg)
 
     return _renorm(x, mean, std)

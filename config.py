@@ -107,6 +107,27 @@ BASELINE_SPECS = [
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
                "--w_a2", "0.3", "--struct_target", "random"]},
+    # ─── corruption-type ablation: Palm-JEPA with a different corruption group (type 4 'current' = palmjepa) ───
+    {"key": "palmjepa_c_lighting", "name": "Palm-JEPA (Lighting corruption)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "lighting",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3"]},
+    {"key": "palmjepa_c_surface", "name": "Palm-JEPA (Surface corruption)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "surface",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3"]},
+    {"key": "palmjepa_c_device", "name": "Palm-JEPA (Device corruption)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "device",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3"]},
+    {"key": "palmjepa_c_all", "name": "Palm-JEPA (All corruption)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "all",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3"]},
     # ─── ablation rows (corruption / structure added to each JEPA variant) ───
     {"key": "jepa_corr", "name": "I-JEPA + corruption", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1"]},
@@ -266,6 +287,22 @@ def get_cfg(args=None):
     p.add_argument("--use_corruption", type=int, default=0, choices=[0, 1],
                    help="1 = apply domain-shift corruption to the JEPA context "
                         "view during training; 0 = standard JEPA (no corruption).")
+    p.add_argument("--corruption_type", default="current",
+                   choices=["current", "lighting", "surface", "device", "all"],
+                   help="Which corruption group is applied (same sampling for every group: each sample "
+                        "corrupted with --corruption_prob; each operator of the group switched on "
+                        "independently with --mix_prob, at least one; random strength per sample). "
+                        "current = the 7 original operators; lighting = brightness knob + side light, "
+                        "glare, cast shadow, coloured light, haze; surface = wet, dry, dirt; device = "
+                        "colour cast, resolution, detail, local contrast, sensor noise, JPEG, device "
+                        "profile; all = every operator of the four groups (mix_prob rescaled so the "
+                        "expected number of operators stays that of 'current').")
+    p.add_argument("--corruption_severity", type=float, default=0.6,
+                   help="Max strength s of the lighting/surface/device operators (per-sample strength "
+                        "= s * U(0.5, 1)).")
+    p.add_argument("--lighting_knob_max", type=float, default=0.4,
+                   help="lighting group: the poor<->strong brightness knob is U(-k, +k); small k keeps "
+                        "images from getting too dark / too bright.")
     p.add_argument("--corruption_prob", type=float, default=0.5)
     p.add_argument("--corruption_mode", default="mixed", choices=["single", "mixed"])
     p.add_argument("--mix_prob", type=float, default=0.4)
