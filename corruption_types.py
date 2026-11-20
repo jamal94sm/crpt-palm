@@ -21,7 +21,7 @@ import torchvision.transforms.functional as TF
 
 LIGHTING = ["light_knob", "side_light", "glare", "cast_shadow", "colored_light", "haze"]
 SURFACE = ["wet", "dry", "dirt"]
-LEGACY = ["wet_legacy"]                       # not part of any group; reachable by name
+LEGACY = ["wet_film"]                         # not part of any group; reachable by name
 DEVICE = ["dev_color_cast", "dev_resolution", "dev_detail", "dev_local_contrast",
           "dev_sensor_noise", "dev_jpeg", "dev_device_profile"]
 
@@ -174,12 +174,12 @@ def haze(x, s):
 
 
 # ───────────────────────────── SURFACE ─────────────────────────────
-def wet(x, s):
-    """Wet palm, and ONLY wet: a water film on the skin. (1) the skin gets uniformly darker and slightly richer in
+def wet_film(x, s):
+    """Alternative wet (not used by default): wet palm, and ONLY wet: a water film on the skin. (1) the skin gets uniformly darker and slightly richer in
     colour (water absorbs light), (2) fine micro-texture is smoothed a little (water fills it), (3) thin specular
     glints appear along the palm lines / edges, inside a patchy random water film. Nothing here depends on the
     large-scale brightness pattern of the image, so uneven lighting is NOT turned into dirt-like blotches
-    (the previous version is kept as wet_legacy)."""
+    (the default `wet` is the crease/sheen operator of simulate_domain_shifts.op_wet)."""
     n, _, H, W = x.shape
     k = W / 512.0
     a = 0.5 + _mag(n, x, s)                                              # wetness, per sample
@@ -196,9 +196,10 @@ def wet(x, s):
     return (out + 0.22 * a * glint * film * tint).clamp(0, 1)
 
 
-def wet_legacy(x, s):
-    """Previous wet operator (crease pooling + broad sheen driven by the image's own brightness). It can turn uneven
-    lighting into dirt/oil-like blotches; kept so earlier runs can be reproduced."""
+def wet(x, s):
+    """Wet palm = simulate_domain_shifts.op_wet (from augment.py): crease pooling + soft sheen + edge streaks
+    (torch port; same constants). The masks come from the image's own brightness. The water-film-only variant
+    is available as wet_film."""
     n, _, H, W = x.shape
     k = W / 512.0
     a = 0.5 + _mag(n, x, s)
