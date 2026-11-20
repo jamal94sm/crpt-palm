@@ -21,6 +21,7 @@ import torchvision.transforms.functional as TF
 
 LIGHTING = ["light_knob", "side_light", "glare", "cast_shadow", "colored_light", "haze"]
 SURFACE = ["wet", "dry", "dirt"]
+LEGACY = ["wet_legacy"]                       # not part of any group; reachable by name
 DEVICE = ["dev_color_cast", "dev_resolution", "dev_detail", "dev_local_contrast",
           "dev_sensor_noise", "dev_jpeg", "dev_device_profile"]
 
@@ -174,7 +175,30 @@ def haze(x, s):
 
 # ───────────────────────────── SURFACE ─────────────────────────────
 def wet(x, s):
-    """Damp skin: crease pooling + soft sheen."""
+    """Wet palm, and ONLY wet: a water film on the skin. (1) the skin gets uniformly darker and slightly richer in
+    colour (water absorbs light), (2) fine micro-texture is smoothed a little (water fills it), (3) thin specular
+    glints appear along the palm lines / edges, inside a patchy random water film. Nothing here depends on the
+    large-scale brightness pattern of the image, so uneven lighting is NOT turned into dirt-like blotches
+    (the previous version is kept as wet_legacy)."""
+    n, _, H, W = x.shape
+    k = W / 512.0
+    a = 0.5 + _mag(n, x, s)                                              # wetness, per sample
+    out = x * (1 - 0.10 * a)
+    g = _lum(out)
+    out = g + (out - g) * (1 + 0.12 * a)                                 # darker, more saturated
+    out = out + (_gblur(out, max(0.8, 1.5 * k)) - out) * (0.30 * a)      # micro-texture partly filled by water
+    L = _gblur(_lum(x), max(1.5, 3.5 * k))                               # smooth first: lines, not pixel noise
+    edge = (L - _gblur(L, max(3.0, 8 * k))).abs()
+    edge = edge / (edge.amax(dim=(1, 2, 3), keepdim=True) + 1e-6)
+    glint = _gblur((edge > 0.30).to(x.dtype), max(1.0, 2.0 * k))         # thin highlights along lines / edges
+    film = _sig((_unit_noise(x, 0.05 * W) - 0.2) * 3.0)                  # patchy water film
+    tint = x.new_tensor([1.0, 1.0, 0.97]).view(1, 3, 1, 1)
+    return (out + 0.22 * a * glint * film * tint).clamp(0, 1)
+
+
+def wet_legacy(x, s):
+    """Previous wet operator (crease pooling + broad sheen driven by the image's own brightness). It can turn uneven
+    lighting into dirt/oil-like blotches; kept so earlier runs can be reproduced."""
     n, _, H, W = x.shape
     k = W / 512.0
     a = 0.5 + _mag(n, x, s)
@@ -302,5 +326,5 @@ def _sub(fn):
     return run
 
 
-FN = {name: _sub(globals()[name]) for name in LIGHTING + SURFACE + DEVICE}
+FN = {name: _sub(globals()[name]) for name in LIGHTING + SURFACE + LEGACY + DEVICE}
 GROUPS = {"lighting": LIGHTING, "surface": SURFACE, "device": DEVICE}

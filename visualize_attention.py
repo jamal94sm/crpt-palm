@@ -358,7 +358,7 @@ def _ops():
 
 def condition_names():
     T = _ops()
-    return list(dict.fromkeys(list(COND_ALIAS) + T.LIGHTING + T.SURFACE + T.DEVICE))
+    return list(dict.fromkeys(list(COND_ALIAS) + T.LIGHTING + T.SURFACE + T.LEGACY + T.DEVICE))
 
 
 def apply_condition(x01, cond, a):
@@ -602,9 +602,16 @@ def main():
     specs = resolve_methods(a)
     paths = pick_images(a)
     pil = [Image.open(p).convert("RGB") for p in paths]
-    print(f"\nimages ({len(paths)}):")
-    for p in paths:
-        print(f"  {p}")
+    print(f"\nDRAWN SAMPLES ({len(paths)} images, left to right in every figure; "
+          f"--pick {a.pick}{' --seed ' + str(a.seed) if a.pick == 'random' else ''}):")
+    for i, p in enumerate(paths, 1):
+        print(f"  column {i}: {os.path.basename(p)}    ({p})")
+    base_, _ = os.path.splitext(a.out)
+    with open(f"{base_}_samples.txt", "w") as f:
+        f.write(f"# drawn samples (column order), --pick {a.pick} --seed {a.seed} --k {a.k}\n")
+        for i, p in enumerate(paths, 1):
+            f.write(f"{i}\t{os.path.basename(p)}\t{p}\n")
+    print(f"  (list saved to {base_}_samples.txt)")
 
     ms = load_models(specs, a)
     base, ext = os.path.splitext(a.out)
