@@ -106,11 +106,11 @@ def _jpeg_one(xi, q):
 
 
 # ───────────────────────────── LIGHTING ─────────────────────────────
-def light_knob(x, s, kmax=0.4):
+def light_knob(x, s, kmax=0.4, k=None):
     """One signed knob k ~ U(-kmax, kmax): k<0 poor lighting (dim), k>0 strong lighting (over-exposure).
     kmax is kept small on purpose so images never become too dark or too bright."""
     n = x.size(0)
-    k = _u(n, x, -kmax, kmax)
+    k = _u(n, x, -kmax, kmax) if k is None else torch.full((n, 1, 1, 1), float(k), device=x.device, dtype=x.dtype)
     m = k.abs()
     dim = x.clamp(1e-4, 1) ** (1 + 0.3 * m) * (1 - 0.65 * m)
     dim = _noise(dim, 0.003 * m, 0.0003 * m)                    # under-exposure amplifies sensor noise
