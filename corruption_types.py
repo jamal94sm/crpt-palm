@@ -21,7 +21,7 @@ import torchvision.transforms.functional as TF
 
 LIGHTING = ["light_knob", "side_light", "glare", "cast_shadow", "colored_light", "haze"]
 SURFACE = ["wet", "dry", "dirt"]
-LEGACY = ["wet_film"]                         # not part of any group; reachable by name
+LEGACY = ["wet_sheen", "wet_film"]            # alternative wet operators: not in any group, reachable by name
 DEVICE = ["dev_color_cast", "dev_resolution", "dev_detail", "dev_local_contrast",
           "dev_sensor_noise", "dev_jpeg", "dev_device_profile"]
 
@@ -179,7 +179,7 @@ def wet_film(x, s):
     colour (water absorbs light), (2) fine micro-texture is smoothed a little (water fills it), (3) thin specular
     glints appear along the palm lines / edges, inside a patchy random water film. Nothing here depends on the
     large-scale brightness pattern of the image, so uneven lighting is NOT turned into dirt-like blotches
-    (the default `wet` is the crease/sheen operator of simulate_domain_shifts.op_wet)."""
+    (the default `wet` is the glossy operator; the crease/sheen one is wet_sheen)."""
     n, _, H, W = x.shape
     k = W / 512.0
     a = 0.5 + _mag(n, x, s)                                              # wetness, per sample
@@ -196,10 +196,50 @@ def wet_film(x, s):
     return (out + 0.22 * a * glint * film * tint).clamp(0, 1)
 
 
+def _rand_field(n, H, W, x):
+    return torch.rand(n, 1, H, W, device=x.device, dtype=x.dtype)
+
+
 def wet(x, s):
-    """Wet palm = simulate_domain_shifts.op_wet (from augment.py): crease pooling + soft sheen + edge streaks
-    (torch port; same constants). The masks come from the image's own brightness. The water-film-only variant
-    is available as wet_film."""
+    """Wet palm = simulate_domain_shifts.op_wet_gloss (wet_look.py), torch port with the same constants:
+    wet tone (darker, richer colour, a little more contrast) + a fake normal map from the image's own brightness +
+    Blinn-Phong specular glints that follow the creases, modulated by an uneven random water film + a soft sheen.
+    Sizes scale with W/627 as in the original. Alternatives: wet_sheen (older default), wet_film."""
+    n, _, H, W = x.shape
+    sc = W / 627.0
+    k = 0.5 + _mag(n, x, s)                                              # strength factor
+    mx, mn = x.amax(1, keepdim=True), x.amin(1, keepdim=True)
+    sat = torch.where(mx > 1e-6, (mx - mn) / mx.clamp(min=1e-6), torch.zeros_like(mx))
+    new_mx = mx * (1 - 0.12 * k)                                         # darker
+    new_mn = new_mx * (1 - (sat * (1 + 0.35 * k)).clamp(0, 1))           # richer colour (HSV saturation x(1+0.35k))
+    t = torch.where(mx > mn, (mx - x) / (mx - mn).clamp(min=1e-6), torch.zeros_like(x))
+    base = new_mx - t * (new_mx - new_mn)
+    base = ((base - 0.5) * (1 + 0.12 * k) + 0.5).clamp(0, 1)
+    height = _gblur(_lum(x), 2.0 * sc)                                   # brightness as a height map
+    p = F.pad(height, (1, 1, 1, 1), mode="replicate")
+    gx = ((p[..., :-2, 2:] - p[..., :-2, :-2]) + 2 * (p[..., 1:-1, 2:] - p[..., 1:-1, :-2])
+          + (p[..., 2:, 2:] - p[..., 2:, :-2])) * sc
+    gy = ((p[..., 2:, :-2] - p[..., :-2, :-2]) + 2 * (p[..., 2:, 1:-1] - p[..., :-2, 1:-1])
+          + (p[..., 2:, 2:] - p[..., :-2, 2:])) * sc
+    nrm = torch.cat([-gx * 6.0, -gy * 6.0, torch.ones_like(height)], 1)
+    nrm = nrm / nrm.norm(dim=1, keepdim=True)
+    Ld = torch.cat([-0.45 + _u(n, x, -0.25, 0.25), -0.55 + _u(n, x, -0.25, 0.25),
+                    torch.full((n, 1, 1, 1), 0.70, device=x.device, dtype=x.dtype)], 1)
+    Ld = Ld / Ld.norm(dim=1, keepdim=True)
+    Hv = Ld + x.new_tensor([0.0, 0.0, 1.0]).view(1, 3, 1, 1)
+    Hv = Hv / Hv.norm(dim=1, keepdim=True)
+    ndh = (nrm * Hv).sum(1, keepdim=True).clamp(0, 1)
+    film = _gblur(_rand_field(n, H, W, x), 40.0 * sc)                    # uneven water layer
+    f_min, f_max = film.amin(dim=(1, 2, 3), keepdim=True), film.amax(dim=(1, 2, 3), keepdim=True)
+    film = (film - f_min) / (f_max - f_min + 1e-8)
+    spec = ndh ** 60 * (0.5 + film)
+    sheen = _gblur(ndh ** 8, 12.0 * sc) * film * 0.12 * k
+    return (base + spec * 0.42 * k + sheen).clamp(0, 1)
+
+
+def wet_sheen(x, s):
+    """Soft wet look = simulate_domain_shifts.op_wet (from augment.py): crease pooling + soft sheen + edge streaks.
+    The masks come from the image's own brightness (blotchy on unevenly lit palms). Was the default `wet` before."""
     n, _, H, W = x.shape
     k = W / 512.0
     a = 0.5 + _mag(n, x, s)
