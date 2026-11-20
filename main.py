@@ -1522,5 +1522,23 @@ def main():
         raise SystemExit(f"unknown method: {cfg.method}")
 
 
+def _oom_hint(cfg):
+    V = int(getattr(cfg, "n_ctx_views", 1) or 1)
+    B = int(getattr(cfg, "batch_size", 0) or 0)
+    nb = int(getattr(cfg, "num_blocks", 2)) * int(getattr(cfg, "n_targets", 1) or 1)
+    print("\n" + "!" * 80 +
+          f"\n  CUDA OUT OF MEMORY.  batch_size={B} x context views={V} = {B * V} context images per step"
+          f" ({nb} target blocks each).\n"
+          f"  Memory grows with batch_size x n_contexts (and with the number of target blocks).\n"
+          f"  Reduce --batch_size and/or --n_contexts so that the product is smaller, e.g. keep\n"
+          f"  batch_size x n_contexts <= ~1300 (512x10 = 5120 needed > 47 GB; this limit is an\n"
+          f"  estimate for a 48 GB GPU, not measured). Also make sure no other process is using the GPU\n"
+          f"  (nvidia-smi).\n" + "!" * 80 + "\n", flush=True)
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except torch.OutOfMemoryError:
+        _oom_hint(get_cfg())
+        raise

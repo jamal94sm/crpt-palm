@@ -403,6 +403,7 @@ def run_all_baselines(cfg):
 
     shared = _shared_flags(cfg)
     results = {}
+    failed = []
 
     force_rerun = bool(getattr(cfg, "force_rerun_baselines", 0))
     n_runs = int(getattr(cfg, "n_runs", 3))
@@ -516,11 +517,27 @@ def run_all_baselines(cfg):
             child_env["EVAL_CKPT_LABEL"] = cfg.eval_ckpt_label
         if getattr(cfg, "eval_ckpt_which", None):
             child_env["EVAL_CKPT_WHICH"] = cfg.eval_ckpt_which
-        subprocess.run(cmd, cwd=cwd, check=True, env=child_env)
+        child_env.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")   # less fragmentation / OOM
+        try:
+            subprocess.run(cmd, cwd=cwd, check=True, env=child_env)
+        except subprocess.CalledProcessError as e:
+            # one failing baseline (e.g. CUDA out of memory) must not throw away the remaining ones
+            failed.append((spec["name"], e.returncode))
+            print(f"\n  !! BASELINE FAILED: {spec['name']} (exit code {e.returncode}) -- see the traceback "
+                  f"above. Continuing with the next baseline.\n")
+            if os.path.exists(stop_path):
+                os.remove(stop_path)
+            continue
         if os.path.exists(stop_path):
             os.remove(stop_path)                                # consumed: the next baseline runs normally
 
         results[spec["name"]] = _parse_summary_csv(out_file)
+
+    if failed:
+        print("\n" + "!" * 80 + "\n  FAILED BASELINES (not in the table below):")
+        for n, rc in failed:
+            print(f"    - {n}  (exit code {rc})")
+        print("!" * 80)
 
     # ─── Combined comparison table ───
     table_text = _build_combined_table(results)
