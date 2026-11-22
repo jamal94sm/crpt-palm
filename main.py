@@ -14,6 +14,7 @@ collide (e.g. ./output_jepa vs ./output_compnet).
 JEPA add-ons (all default OFF, so the plain flags reproduce the original
 baseline exactly):
   --use_corruption 1  : domain-shift corruption applied to the CONTEXT view only
+                        (--corrupt_target 1 also corrupts the TARGET/teacher input, own draw)
   --struct_mode a1/a2/both : Gabor line-structure auxiliary loss(es)
   --use_supervision 1 : supervised identity term (SupCon / ArcFace / CE) on
                         pooled context embeddings, using source-domain labels
@@ -511,6 +512,14 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     _tag = float(getattr(cfg, "target_aug_strength", 0.0) or 0.0)
     if _tag > 0 and use_dmtjepa:
         raise SystemExit("--target_aug_strength > 0 is not supported with DMT-JEPA")
+    _corrupt_target = bool(getattr(cfg, "corrupt_target", 0))
+    if _corrupt_target:
+        if not getattr(cfg, "use_corruption", 0):
+            raise SystemExit("--corrupt_target 1 needs --use_corruption 1")
+        if _tag > 0:
+            raise SystemExit("--corrupt_target 1 cannot be combined with --target_aug_strength > 0")
+        print("  Target (teacher) input: CORRUPTED (own independent draw, same type/probability as the context); "
+              "the structural target stays computed from the clean image")
     use_koleo = bool(getattr(cfg, "use_koleo", 0)) and cfg.koleo_weight > 0
     if use_koleo:
         print(f"  KoLeo: ON  weight={cfg.koleo_weight}  (pooled context features, per view)")
@@ -700,7 +709,8 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                 ep_var += z_flat.var(dim=0).mean().item()
 
             with torch.no_grad():
-                tgt_full = target_encoder(images)
+                tgt_in = corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD) if _corrupt_target else images
+                tgt_full = target_encoder(tgt_in)
                 if n_views > 1:
                     tgt_full = tgt_full.repeat(n_views, 1, 1)          # one teacher pass, reused by every view
                 if use_dmtjepa:
