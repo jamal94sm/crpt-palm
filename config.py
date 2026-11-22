@@ -160,6 +160,22 @@ BASELINE_SPECS = [
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
                "--w_a2", "0.3"]},
+    # ─── structural-loss ablation (infonce = palmjepa) ───
+    {"key": "palmjepa_loss_cosine", "name": "Palm-JEPA (cosine struct loss)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "cosine",
+               "--w_a2", "0.3"]},
+    {"key": "palmjepa_loss_l2", "name": "Palm-JEPA (L2 struct loss)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "l2",
+               "--w_a2", "0.3"]},
+    {"key": "palmjepa_loss_smoothl1", "name": "Palm-JEPA (smooth-L1 struct loss)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "smooth_l1",
+               "--w_a2", "0.3"]},
     # ─── ablation rows (corruption / structure added to each JEPA variant) ───
     {"key": "jepa_corr", "name": "I-JEPA + corruption", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1"]},
@@ -477,13 +493,13 @@ def get_cfg(args=None):
 
     # ─── Structural loss form ─────────────────────────────────
     p.add_argument("--struct_loss", default="cosine",
-                   choices=["cosine", "infonce", "smooth_l1"],
+                   choices=["cosine", "infonce", "smooth_l1", "l2"],
                    help="Default structural loss for both tasks.")
     p.add_argument("--struct_loss_a1", default=None,
-                   choices=["cosine", "infonce", "smooth_l1"],
+                   choices=["cosine", "infonce", "smooth_l1", "l2"],
                    help="Override --struct_loss for the A1 (visible) task.")
     p.add_argument("--struct_loss_a2", default=None,
-                   choices=["cosine", "infonce", "smooth_l1"],
+                   choices=["cosine", "infonce", "smooth_l1", "l2"],
                    help="Override --struct_loss for the A2 (hidden) task.")
     p.add_argument("--infonce_temp", type=float, default=0.1)
     p.add_argument("--infonce_max_n", type=int, default=4096)

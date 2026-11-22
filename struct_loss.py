@@ -14,6 +14,14 @@ def structure_loss(pred, tgt, kind="cosine", temperature=0.1, max_n=4096):
             cos = (p * t).sum(-1).mean().item()
         return loss, {"cos": cos, "top1": float("nan"), "chance": float("nan")}
 
+    if kind == "l2":
+        # squared L2 distance between the L2-normalised vectors, summed over the feature dim and averaged over
+        # patches:  ||p - t||^2 = 2 - 2 cos(p, t)   (same optimum as "cosine"; twice its loss scale and gradient)
+        loss = ((p - t) ** 2).sum(-1).mean()
+        with torch.no_grad():
+            cos = (p * t).sum(-1).mean().item()
+        return loss, {"cos": cos, "top1": float("nan"), "chance": float("nan")}
+
     if kind == "cosine":
         cos_v = (p * t).sum(-1)
         loss = (1.0 - cos_v).mean()
