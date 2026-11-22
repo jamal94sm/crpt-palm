@@ -148,9 +148,15 @@ BASELINE_SPECS = [
                "--struct_mode", "a2", "--struct_loss", "infonce",
                "--w_a2", "0.3"]},
     # Palm-JEPA, all corruption types, applied to the context AND the target (teacher) input
-    {"key": "palmjepa_c_all_ct", "name": "Palm-JEPA (All corruption, context + target)", "script": "self",
+    {"key": "palmjepa_c_all_ct_indep", "name": "Palm-JEPA (All corruption, context + target, independent draws)", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "all",
                "--corrupt_target", "1",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce",
+               "--w_a2", "0.3"]},
+    {"key": "palmjepa_c_all_ct_same", "name": "Palm-JEPA (All corruption, context + target, same draw)", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "all",
+               "--corrupt_target", "2",
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
                "--w_a2", "0.3"]},
@@ -304,10 +310,12 @@ def get_cfg(args=None):
                    help="a > 0: every target view gets its own mild photometric jitter "
                         "(brightness/contrast/gamma in 1 +- a) of the TEACHER input; 0 = clean teacher, "
                         "one shared pass (default, the standard method).")
-    p.add_argument("--corrupt_target", type=int, default=0, choices=[0, 1],
-                   help="1 = ALSO corrupt the TARGET (teacher) input, with its own independent corruption draw "
-                        "(same --corruption_type / probability as the context). Default 0 = clean target "
-                        "(corruption on the context view only). Needs --use_corruption 1; not with --target_aug_strength > 0.")
+    p.add_argument("--corrupt_target", type=int, default=0, choices=[0, 1, 2],
+                   help="also corrupt the TARGET (teacher) input: 0 = clean target (default, context-only corruption); "
+                        "1 = the target gets its OWN independent corruption draw (same type / per-sample probability "
+                        "as the context); 2 = the target gets the SAME corruption draw as the context. "
+                        "Needs --use_corruption 1; not with --target_aug_strength > 0; 2 with several context views "
+                        "needs --ctx_view_mode mask.")
     p.add_argument("--n_ctx_views", "--n_contexts", dest="n_ctx_views", type=int, default=1,
                    help="Context views per image (JEPA / Palm-JEPA only). Each view gets its own context mask "
                         "and its own random corruption; all views share the target blocks and the single "

@@ -14,7 +14,7 @@ collide (e.g. ./output_jepa vs ./output_compnet).
 JEPA add-ons (all default OFF, so the plain flags reproduce the original
 baseline exactly):
   --use_corruption 1  : domain-shift corruption applied to the CONTEXT view only
-                        (--corrupt_target 1 also corrupts the TARGET/teacher input, own draw)
+                        (--corrupt_target 1 / 2 also corrupts the TARGET/teacher input: own draw / same draw)
   --struct_mode a1/a2/both : Gabor line-structure auxiliary loss(es)
   --use_supervision 1 : supervised identity term (SupCon / ArcFace / CE) on
                         pooled context embeddings, using source-domain labels
@@ -512,14 +512,19 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
     _tag = float(getattr(cfg, "target_aug_strength", 0.0) or 0.0)
     if _tag > 0 and use_dmtjepa:
         raise SystemExit("--target_aug_strength > 0 is not supported with DMT-JEPA")
-    _corrupt_target = bool(getattr(cfg, "corrupt_target", 0))
+    _corrupt_target = int(getattr(cfg, "corrupt_target", 0) or 0)
     if _corrupt_target:
         if not getattr(cfg, "use_corruption", 0):
-            raise SystemExit("--corrupt_target 1 needs --use_corruption 1")
+            raise SystemExit("--corrupt_target 1/2 needs --use_corruption 1")
         if _tag > 0:
-            raise SystemExit("--corrupt_target 1 cannot be combined with --target_aug_strength > 0")
-        print("  Target (teacher) input: CORRUPTED (own independent draw, same type/probability as the context); "
-              "the structural target stays computed from the clean image")
+            raise SystemExit("--corrupt_target 1/2 cannot be combined with --target_aug_strength > 0")
+        if _corrupt_target == 2 and n_views > 1 and getattr(cfg, "ctx_view_mode", "both") != "mask":
+            raise SystemExit("--corrupt_target 2 (same draw) with several context views needs --ctx_view_mode mask "
+                             "(one shared corruption draw); otherwise there is no single context corruption to reuse")
+        print("  Target (teacher) input: CORRUPTED, "
+              + ("with the SAME corruption draw as the context" if _corrupt_target == 2 else
+                 "with its OWN independent draw (same type/probability as the context)")
+              + "; the structural target stays computed from the clean image")
     use_koleo = bool(getattr(cfg, "use_koleo", 0)) and cfg.koleo_weight > 0
     if use_koleo:
         print(f"  KoLeo: ON  weight={cfg.koleo_weight}  (pooled context features, per view)")
@@ -691,15 +696,17 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                                                      tuple(cfg.ctx_ratio), n_views, device=cfg.device)]
                 tgt_masks = [t.repeat(n_views, 1) for t in tgt_masks]
 
+            _ctx_draw = None                # the (B,...) corruption draw of the context, reused by --corrupt_target 2
             if cfg.use_corruption:
                 if n_views > 1:
                     if _vm == "mask":       # one corruption draw shared by all views
-                        images_ctx = corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD).repeat(n_views, 1, 1, 1)
+                        _ctx_draw = corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD)
+                        images_ctx = _ctx_draw.repeat(n_views, 1, 1, 1)
                     else:                   # "both" / "corrupt": independent draw per view
                         images_ctx = torch.cat([corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD)
                                                 for _ in range(n_views)], dim=0)
                 else:
-                    images_ctx = corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD)
+                    images_ctx = _ctx_draw = corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD)
             else:
                 images_ctx = images if n_views == 1 else images.repeat(n_views, 1, 1, 1)
             ctx_embeds = context_encoder(images_ctx, ctx_masks)
@@ -709,7 +716,12 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                 ep_var += z_flat.var(dim=0).mean().item()
 
             with torch.no_grad():
-                tgt_in = corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD) if _corrupt_target else images
+                if _corrupt_target == 2:        # SAME corruption draw as the context
+                    tgt_in = _ctx_draw
+                elif _corrupt_target == 1:      # its OWN independent draw
+                    tgt_in = corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD)
+                else:
+                    tgt_in = images
                 tgt_full = target_encoder(tgt_in)
                 if n_views > 1:
                     tgt_full = tgt_full.repeat(n_views, 1, 1)          # one teacher pass, reused by every view
