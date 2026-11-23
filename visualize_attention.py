@@ -389,7 +389,7 @@ def apply_condition(x01, cond, a):
     fn = getattr(T, op)
     if op == "light_knob":
         k = None if sign is None else sign * a.light_knob          # fixed knob: poor (-) / strong (+) lighting
-        out = fn(x01, a.severity, a.light_knob, k)
+        out = fn(x01, a.severity, a.light_knob, k, noise=a.light_noise)
     else:
         out = fn(x01, a.severity)
     return out.clamp(0, 1)
@@ -645,6 +645,9 @@ def main():
     ap.add_argument("--severity", type=float, default=0.6, help="strength s of the corruptions (as --corruption_severity in training)")
     ap.add_argument("--light_knob", type=float, default=0.4,
                     help="poor_light / strong_light use the fixed brightness knob -/+ this value (as --lighting_knob_max)")
+    ap.add_argument("--light_noise", action="store_true",
+                    help="poor_light / strong_light: keep the sensor noise of the under-exposure branch (training has it). "
+                         "Default here: no noise, so the Lighting column shows only the exposure change")
     ap.add_argument("--cond_seed", type=int, default=0, help="seed of the corruption (the same for every model)")
     ap.add_argument("--cond_title", action="store_true", help="write the condition name above each figure")
     ap.add_argument("--combined", action="store_true",
