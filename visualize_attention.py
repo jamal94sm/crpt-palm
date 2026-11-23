@@ -25,6 +25,13 @@ The corruptions are the ones of the corruption-type ablation (corruption_types.p
 encoder, with a fixed seed (--cond_seed) and strength (--severity, --light_knob). --list_conditions prints the names.
 Rows: --methods / --skip choose the baselines (VICReg and MaskFeat are in the default list).
 
+ONE COMBINED FIGURE (--combined): a single figure for k=2 palm images with the conditions side by side:
+    row 0   : for each image  [original | Lighting | Surface (wet) | Device]   (the inputs the models see)
+    rows 1+ : the attention maps of every selected method on exactly those inputs
+  columns = images x conditions (a small gap separates the images). The conditions are --conditions (default
+  clean poor_light wet device), their column titles --col_labels; the figure is written to --out as given
+  (+ .npz). Typical:  --combined --k 2 --cell 1.3   (or --images a.png b.png).
+
 WHICH ROWS: --methods selects and orders them (a subset is fine), --skip removes some from the default list,
 --ckpt_dirs TAG=DIR takes a method's checkpoint from another folder. FONT SIZE: --font_scale (all text),
 --label_size / --title_size / --cbar_size (individually), --cell (inches per image).
@@ -53,6 +60,7 @@ Run from the repo root (models.py importable):
   python visualize_attention.py --methods dinov2 jepa palmjepa --font_scale 1.8
   python visualize_attention.py --ckpt_dir A --ckpt_dirs palmjepa=B dinov2=C --ckpt_which last
   python visualize_attention.py --ckpt_dir A --conditions clean poor_light wet device --methods vicreg maskfeat jepa palmjepa
+  python visualize_attention.py --ckpt_dir A --combined --k 2 --pick random --seed 3 --out attention_combined.png
 """
 import argparse
 import glob
@@ -351,6 +359,10 @@ COND_ALIAS = {"clean": None, "poor_light": ("light_knob", -1), "strong_light": (
               "device": ("dev_device_profile", None)}
 
 
+COMBINED_LABEL = {"clean": "Original", "poor_light": "Lighting", "strong_light": "Strong light",
+                  "wet": "Surface (wet)", "dry": "Surface (dry)", "dirt": "Surface (dirt)", "device": "Device"}
+
+
 def _ops():
     import corruption_types as T
     return T
@@ -531,6 +543,85 @@ def render_figure(rows, pil, paths, ms, cond, a, out):
     print(f"  saved {out} and {npz}")
 
 
+def render_combined(rows_by_cond, pil, paths, ms, conds, a, out):
+    """ONE figure. Columns = images x conditions (image-major, a gap between images); row 0 = the inputs (original /
+    corrupted), then one row per method with its attention maps on exactly those inputs."""
+    from matplotlib.gridspec import GridSpec
+    B, C = len(paths), len(conds)
+    D = max(m_["S"] for m_ in ms)
+    base = torch.stack([transforms.ToTensor()(im.resize((D, D), Image.BICUBIC)) for im in pil])
+    disp = {c: apply_condition(base, c, a).permute(0, 2, 3, 1).numpy() for c in conds}
+    _cl = {_norm(k): v for k, v in COMBINED_LABEL.items()}
+    _cd = {_norm(k): v for k, v in COND_DISPLAY.items()}
+    labels = a.col_labels if a.col_labels else [_cl.get(_norm(c), _cd.get(_norm(c), c)) for c in conds]
+    if len(labels) != C:
+        raise SystemExit(f"--col_labels needs {C} labels (one per condition), got {len(labels)}")
+    methods = [r[0] for r in rows_by_cond[conds[0]]]
+    ups = {c: {lab: upsample_maps(mp, D).numpy() for lab, mp, _ in rows_by_cond[c]} for c in conds}
+    ents = {c: {lab: ent.numpy() for lab, _, ent in rows_by_cond[c]} for c in conds}
+
+    fs = a.font_scale
+    lab_sz = a.label_size if a.label_size else 9 * fs
+    ttl_sz = a.title_size if a.title_size else 6 * fs
+    cb_sz = a.cbar_size if a.cbar_size else 7 * fs
+    col_sz = a.col_title_size if a.col_title_size else 8 * fs
+    cell = a.cell
+    R_ = len(methods) + (0 if a.no_image_row else 1)
+    ncol = B * C + (B - 1)                                            # + one spacer column between images
+    gap_w, gap_h, spacer = 0.03, 0.05 + (ttl_sz / 72 * 1.7 if a.show_entropy else 0.0), 0.18
+    left_in, right_in = 0.1 + lab_sz / 72 * 1.4, 0.5 + cb_sz / 72 * 2.4
+    top_in, bot_in = 0.12 + col_sz / 72 * 1.6, 0.05
+    W = left_in + cell * B * C + gap_w * (B * (C - 1)) + spacer * (B - 1) + right_in
+    H = top_in + cell * R_ + gap_h * (R_ - 1) + bot_in
+    ratios = []
+    for b in range(B):
+        ratios += [cell] * C
+        if b < B - 1:
+            ratios.append(spacer)
+    fig = plt.figure(figsize=(W, H))
+    gs = GridSpec(R_, ncol, figure=fig, width_ratios=ratios, left=left_in / W, right=1 - right_in / W,
+                  top=1 - top_in / H, bottom=bot_in / H, wspace=gap_w / cell, hspace=gap_h / cell)
+    first_ax = {}
+    for b in range(B):
+        for ci, c in enumerate(conds):
+            col = b * (C + 1) + ci
+            r = 0
+            if not a.no_image_row:
+                ax = fig.add_subplot(gs[0, col]); ax.imshow(disp[c][b]); ax.axis("off")
+                first_ax[(b, ci)] = ax
+                r = 1
+            for ri, lab in enumerate(methods, start=r):
+                ax = fig.add_subplot(gs[ri, col])
+                ax.imshow(disp[c][b]); ax.imshow(ups[c][lab][b], cmap=a.cmap, alpha=a.alpha, vmin=0, vmax=1)
+                if a.show_entropy:
+                    ax.set_title(f"H/Hmax = {ents[c][lab][b]:.3f}", fontsize=ttl_sz, pad=2)
+                ax.axis("off")
+                if ri == r:
+                    first_ax.setdefault((b, ci), ax)
+                if b == 0 and ci == 0:
+                    ax.text(-0.04, 0.5, lab, transform=ax.transAxes, rotation=90, va="center", ha="right",
+                            fontsize=lab_sz, fontweight="bold")
+            if b == 0 and ci == 0 and not a.no_image_row:
+                first_ax[(b, ci)].text(-0.04, 0.5, "Input", transform=first_ax[(b, ci)].transAxes, rotation=90,
+                                       va="center", ha="right", fontsize=lab_sz, fontweight="bold")
+            top = first_ax[(b, ci)]
+            off = 1.03 + (0.16 if (a.no_image_row and a.show_entropy) else 0.0)
+            top.text(0.5, off, labels[ci], transform=top.transAxes, ha="center", va="bottom",
+                     fontsize=col_sz, fontweight="bold")
+    cax = fig.add_axes([(W - right_in + 0.12) / W, 0.2, 0.14 / W, 0.5])
+    sm = plt.cm.ScalarMappable(cmap=a.cmap, norm=plt.Normalize(0, 1))
+    cb = fig.colorbar(sm, cax=cax)
+    cb.set_label("relative attention", fontsize=cb_sz)
+    cb.ax.tick_params(labelsize=cb_sz * 0.88)
+    plt.savefig(out, dpi=a.dpi, bbox_inches="tight", pad_inches=0.1)
+    plt.close(fig)
+    npz = os.path.splitext(out)[0] + ".npz"
+    np.savez(npz, paths=np.array(paths), methods=np.array(methods), map_type=a.map, conditions=np.array(conds),
+             **{f"maps__{c}__{lab}": mp.numpy() for c in conds for lab, mp, _ in rows_by_cond[c]},
+             **{f"entropy__{c}__{lab}": ent.numpy() for c in conds for lab, _, ent in rows_by_cond[c]})
+    print(f"  saved {out} and {npz}")
+
+
 # ───────────────────────── main ─────────────────────────
 def main():
     ap = argparse.ArgumentParser(description="Last-layer attention maps: methods (rows) x palm images (columns), "
@@ -556,7 +647,16 @@ def main():
                     help="poor_light / strong_light use the fixed brightness knob -/+ this value (as --lighting_knob_max)")
     ap.add_argument("--cond_seed", type=int, default=0, help="seed of the corruption (the same for every model)")
     ap.add_argument("--cond_title", action="store_true", help="write the condition name above each figure")
-    ap.add_argument("--k", "--n", dest="k", type=int, default=5, help="number of palm images (columns)")
+    ap.add_argument("--combined", action="store_true",
+                    help="ONE figure: row 0 = the inputs (original / corrupted per --conditions) of each image side by "
+                         "side, the other rows = the attention maps of every method on those inputs. "
+                         "Columns = images x conditions. Written to --out as given.")
+    ap.add_argument("--col_labels", nargs="*", default=None, metavar="LABEL",
+                    help="--combined only: column titles, one per condition (default: Original, Lighting, "
+                         "Surface (wet), Device for clean poor_light wet device)")
+    ap.add_argument("--col_title_size", type=float, default=None, help="--combined only: column-title font size in pt")
+    ap.add_argument("--k", "--n", dest="k", type=int, default=None,
+                    help="number of palm images (columns; default 5, or 2 with --combined)")
     ap.add_argument("--images", nargs="*", default=None, help="explicit image paths (takes priority over --image_dir)")
     ap.add_argument("--image_dir", default=DEFAULT_IMAGE_DIR, help="folder searched recursively when --images is not given")
     ap.add_argument("--pick", choices=["spread", "random"], default="spread",
@@ -581,10 +681,15 @@ def main():
     ap.add_argument("--label_size", type=float, default=None, help="row-name font size in pt (default 11 x --font_scale)")
     ap.add_argument("--title_size", type=float, default=None, help="entropy-title font size in pt (default 6 x --font_scale)")
     ap.add_argument("--cbar_size", type=float, default=None, help="colorbar font size in pt (default 8 x --font_scale)")
-    ap.add_argument("--cell", type=float, default=2.15, help="height and width of one image cell in inches")
+    ap.add_argument("--cell", type=float, default=None,
+                    help="height and width of one image cell in inches (default 2.15; 1.3 with --combined)")
     ap.add_argument("--show_entropy", action="store_true", help="print H/Hmax (1 = uniform map) above every map")
     ap.add_argument("--dpi", type=int, default=150)
     a = ap.parse_args()
+    if a.k is None:
+        a.k = 2 if a.combined else 5
+    if a.cell is None:
+        a.cell = 1.3 if a.combined else 2.15
     if a.list_conditions:
         print("conditions:", ", ".join(condition_names()))
         return
@@ -616,6 +721,14 @@ def main():
     ms = load_models(specs, a)
     base, ext = os.path.splitext(a.out)
     ext = ext or ".png"
+    if a.combined:
+        rows_by_cond = {}
+        for ci, cond in enumerate(a.conditions):
+            print(f"\n── condition: {cond} ──")
+            rows_by_cond[cond] = compute_rows(ms, pil, paths, cond, a, check=(ci == 0))
+        render_combined(rows_by_cond, pil, paths, ms, list(a.conditions), a, a.out if os.path.splitext(a.out)[1] else a.out + ".png")
+        print(f"\nsaved 1 combined figure: {a.out}")
+        return
     outs = []
     for ci, cond in enumerate(a.conditions):
         print(f"\n── condition: {cond} ──")
