@@ -4,7 +4,7 @@ Batched torch ports (GPU or CPU) of the operators in simulate_domain_shifts.py. 
 takes x (n,3,H,W) in [0,1] and returns the same shape; every sample gets its OWN random
 strength / parameters. corruption.corrupt_images decides WHICH samples and WHICH operators.
 
-Groups (registered in GROUPS, applied to the selected samples exactly like the 7 'current' ops):
+Groups (registered in GROUPS, applied to the selected samples exactly like the 7 'photometric' ops):
   lighting : light_knob (signed poor<->strong brightness, mild range), side_light, glare,
              cast_shadow, colored_light, haze
   surface  : wet, dry, dirt

@@ -126,7 +126,7 @@ BASELINE_SPECS = [
                "--struct_target", "ridge",
                "--n_targets", "2", "--n_ctx_views", "10", "--ctx_view_mode", "both",
                "--use_koleo", "1", "--koleo_weight", "0.1"]},
-    # ─── corruption-type ablation: Palm-JEPA with a different corruption group (type 4 'current' = palmjepa) ───
+    # ─── corruption-type ablation: Palm-JEPA with a different corruption group (the photometric type = the old Palm-JEPA default) ───
     {"key": "palmjepa_c_lighting", "name": "Palm-JEPA (Lighting corruption)", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "lighting",
                "--gabor_gray", "0",
@@ -377,18 +377,18 @@ def get_cfg(args=None):
                    help="1 = apply domain-shift corruption to the JEPA context "
                         "view during training; 0 = standard JEPA (no corruption).")
     # NOTE: the Palm-JEPA presets of BASELINE_SPECS (palmjepa, palmjepa_<target>, palmjepa_mv*, palmjepa_loss_*)
-    # set --corruption_type all; pass --corruption_type current (or another group) on the command line to
-    # override that (ci_utils._OVERRIDE_FLAGS). Plain `main.py --use_corruption 1` keeps this argparse default.
-    p.add_argument("--corruption_type", default="current",
-                   choices=["current", "lighting", "surface", "device", "all"],
+    # set --corruption_type all; pass --corruption_type photometric (or another group) on the command line to
+    # override that (ci_utils._OVERRIDE_FLAGS). Plain `main.py --use_corruption 1` keeps this argparse default (photometric).
+    p.add_argument("--corruption_type", default="photometric",
+                   choices=["photometric", "current", "lighting", "surface", "device", "all"],
                    help="Which corruption group is applied (same sampling for every group: each sample "
                         "corrupted with --corruption_prob; each operator of the group switched on "
                         "independently with --mix_prob, at least one; random strength per sample). "
-                        "current = the 7 original operators; lighting = brightness knob + side light, "
+                        "photometric (alias: current) = the 7 original generic photometric operators; lighting = brightness knob + side light, "
                         "glare, cast shadow, coloured light, haze; surface = wet, dry, dirt; device = "
                         "colour cast, resolution, detail, local contrast, sensor noise, JPEG, device "
                         "profile; all = every operator of the four groups (mix_prob rescaled so the "
-                        "expected number of operators stays that of 'current').")
+                        "expected number of operators stays that of 'photometric').")
     p.add_argument("--corruption_severity", type=float, default=0.6,
                    help="Max strength s of the lighting/surface/device operators (per-sample strength "
                         "= s * U(0.5, 1)).")

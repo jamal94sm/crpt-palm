@@ -89,16 +89,16 @@ _FN = {
 }
 
 
-CORRUPTION_TYPES = ["current", "lighting", "surface", "device", "all"]
+CORRUPTION_TYPES = ["photometric", "lighting", "surface", "device", "all"]   # "current" = deprecated alias of "photometric"
 
 
 def corruption_set(ctype, mix_prob):
     """(ordered operator names, {name: fn(xs, mask, cfg)}, per-operator switch-on probability).
-    current = the 7 original operators (unchanged). lighting / surface / device = the groups of
-    corruption_types.py. all = surface -> lighting -> device -> current (physical order), every
+    photometric = the 7 original generic photometric operators (unchanged; formerly called 'current'). lighting / surface / device = the groups of
+    corruption_types.py. all = surface -> lighting -> device -> photometric (physical order), every
     operator switched on independently with mix_prob scaled so the EXPECTED number of operators per
-    corrupted sample stays that of 'current' (mix_prob x 7)."""
-    if ctype == "current":
+    corrupted sample stays that of 'photometric' (mix_prob x 7)."""
+    if ctype in ("photometric", "current"):
         return CORRUPTION_NAMES, _FN, mix_prob
     import corruption_types as T
     fns = dict(T.FN)
@@ -130,7 +130,7 @@ def corrupt_images(images, cfg, mean, std):
     if not corrupt_mask.any():
         return images
 
-    ctype = getattr(cfg, "corruption_type", "current")
+    ctype = getattr(cfg, "corruption_type", "photometric")
     names, fns, mix_prob = corruption_set(ctype, getattr(cfg, "mix_prob", 0.4))
     n = len(names)
     if getattr(cfg, "corruption_mode", "mixed") == "single":
