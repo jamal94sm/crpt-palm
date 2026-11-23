@@ -171,18 +171,20 @@ BASELINE_SPECS = [
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
                "--w_a2", "1.0"]},
-    # ─── masking-ratio ablation: --trg_ratio = area of EACH target block (x --num_blocks 2 blocks); default 0.10-0.15 ───
-    {"key": "palmjepa_mask_low", "name": "Palm-JEPA (target blocks 5-7.5% each, ~10-15% hidden)", "script": "self",
+    # ─── masking-ratio ablation: --trg_ratio = area of EACH target block (x --num_blocks 2); default 0.10-0.15.
+    #     Measured on the 8x8 grid, batch 256 (blocks are trimmed to the smallest block of the batch): hidden / context kept
+    #     low 12% / 75%, default 18% / 59%, high 33% / 33%, xhigh 48% / 17.5% ───
+    {"key": "palmjepa_mask_low", "name": "Palm-JEPA (mask low: blocks 5-7.5%, ~12% hidden)", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "all",
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
                "--w_a2", "0.3", "--trg_ratio", "0.05", "0.075"]},
-    {"key": "palmjepa_mask_high", "name": "Palm-JEPA (target blocks 20-30% each, ~40-60% hidden)", "script": "self",
+    {"key": "palmjepa_mask_high", "name": "Palm-JEPA (mask high: blocks 20-30%, ~33% hidden)", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "all",
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
                "--w_a2", "0.3", "--trg_ratio", "0.20", "0.30"]},
-    {"key": "palmjepa_mask_xhigh", "name": "Palm-JEPA (target blocks 30-40% each, up to ~60-80% hidden)", "script": "self",
+    {"key": "palmjepa_mask_xhigh", "name": "Palm-JEPA (mask xhigh: blocks 30-40%, ~48% hidden)", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "all",
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
