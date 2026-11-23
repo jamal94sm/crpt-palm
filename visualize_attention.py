@@ -390,6 +390,8 @@ def apply_condition(x01, cond, a):
     if op == "light_knob":
         k = None if sign is None else sign * a.light_knob          # fixed knob: poor (-) / strong (+) lighting
         out = fn(x01, a.severity, a.light_knob, k, noise=a.light_noise)
+    elif op == "wet":
+        out = fn(x01, a.severity, a.wet_gain)
     else:
         out = fn(x01, a.severity)
     return out.clamp(0, 1)
@@ -648,6 +650,9 @@ def main():
     ap.add_argument("--light_noise", action="store_true",
                     help="poor_light / strong_light: keep the sensor noise of the under-exposure branch (training has it). "
                          "Default here: no noise, so the Lighting column shows only the exposure change")
+    ap.add_argument("--wet_gain", type=float, default=1.0,
+                    help="wet condition only: multiplies the glint strength (normal-map slope and specular weight). 1 = exactly "
+                         "the training operator; 2-4 makes the water look obvious on smooth, low-contrast palms (state it in the caption)")
     ap.add_argument("--cond_seed", type=int, default=0, help="seed of the corruption (the same for every model)")
     ap.add_argument("--cond_title", action="store_true", help="write the condition name above each figure")
     ap.add_argument("--combined", action="store_true",

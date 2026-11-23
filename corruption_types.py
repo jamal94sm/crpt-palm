@@ -202,11 +202,12 @@ def _rand_field(n, H, W, x):
     return torch.rand(n, 1, H, W, device=x.device, dtype=x.dtype)
 
 
-def wet(x, s):
+def wet(x, s, gain=1.0):
     """Wet palm = simulate_domain_shifts.op_wet_gloss (wet_look.py), torch port with the same constants:
     wet tone (darker, richer colour, a little more contrast) + a fake normal map from the image's own brightness +
     Blinn-Phong specular glints that follow the creases, modulated by an uneven random water film + a soft sheen.
-    Sizes scale with W/627 as in the original. Alternatives: wet_sheen (older default), wet_film."""
+    Sizes scale with W/627 as in the original. gain>1 (visualisation only; training keeps 1) makes the glints stronger and
+    wider: it multiplies the normal-map slope (6.0) and the specular weight (0.42). Alternatives: wet_sheen (older default), wet_film."""
     n, _, H, W = x.shape
     sc = W / 627.0
     k = 0.5 + _mag(n, x, s)                                              # strength factor
@@ -223,7 +224,7 @@ def wet(x, s):
           + (p[..., 2:, 2:] - p[..., 2:, :-2])) * sc
     gy = ((p[..., 2:, :-2] - p[..., :-2, :-2]) + 2 * (p[..., 2:, 1:-1] - p[..., :-2, 1:-1])
           + (p[..., 2:, 2:] - p[..., :-2, 2:])) * sc
-    nrm = torch.cat([-gx * 6.0, -gy * 6.0, torch.ones_like(height)], 1)
+    nrm = torch.cat([-gx * 6.0 * gain, -gy * 6.0 * gain, torch.ones_like(height)], 1)
     nrm = nrm / nrm.norm(dim=1, keepdim=True)
     Ld = torch.cat([-0.45 + _u(n, x, -0.25, 0.25), -0.55 + _u(n, x, -0.25, 0.25),
                     torch.full((n, 1, 1, 1), 0.70, device=x.device, dtype=x.dtype)], 1)
@@ -236,7 +237,7 @@ def wet(x, s):
     film = (film - f_min) / (f_max - f_min + 1e-8)
     spec = ndh ** 60 * (0.5 + film)
     sheen = _gblur(ndh ** 8, 12.0 * sc) * film * 0.12 * k
-    return (base + spec * 0.42 * k + sheen).clamp(0, 1)
+    return (base + spec * 0.42 * k * gain + sheen).clamp(0, 1)
 
 
 def wet_sheen(x, s):
