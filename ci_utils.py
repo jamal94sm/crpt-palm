@@ -156,7 +156,8 @@ def run_multi_seed(cfg, train_fns, out_path):
 # the preset's 5.  Not given -> the preset (or default) is used.
 _OVERRIDE_FLAGS = [("--n_targets", "n_targets"), ("--num_blocks", "num_blocks"),
                    ("--n_ctx_views", "n_ctx_views"), ("--n_contexts", "n_ctx_views"),
-                   ("--ctx_view_mode", "ctx_view_mode"), ("--target_aug_strength", "target_aug_strength")]
+                   ("--ctx_view_mode", "ctx_view_mode"), ("--target_aug_strength", "target_aug_strength"),
+                   ("--corruption_type", "corruption_type"), ("--corruption_severity", "corruption_severity")]
 
 
 def _cli_overrides(cfg):
