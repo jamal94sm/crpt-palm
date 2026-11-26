@@ -224,7 +224,7 @@ def train_lejepa(cfg, train_loader, eval_dict, out_path):
         ep_loss = ep_total / n
         ep = epoch + 1
         if ep % 5 == 0 or ep == cfg.epochs or ep == 1:
-            print(f" ep {ep:03d}/{cfg.epochs} loss={ep_loss:.4f} (pred={ep_pred/n:.4f} sigreg={ep_sig/n:.4f}) "
+            print(f" ({os.environ.get('CKPT_KEY', 'lejepa')}) ep {ep:03d}/{cfg.epochs} loss={ep_loss:.4f} (pred={ep_pred/n:.4f} sigreg={ep_sig/n:.4f}) "
                   f"lr={lr_sched[global_step-1]:.2e} [{time.time()-t0:.1f}s]")
 
         if ep % cfg.eval_every == 0 or ep == cfg.epochs:

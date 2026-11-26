@@ -294,7 +294,7 @@ def train_barlowtwins(cfg, train_loader, eval_dict, out_path):
         if epoch % 5 == 0 or epoch == cfg.epochs or epoch == 1:
             lr_w = opt.param_groups[0]["lr"]
             lr_b = opt.param_groups[1]["lr"]
-            print(f" ep {epoch:03d}/{cfg.epochs} loss={ep_loss:.4f} "
+            print(f" ({os.environ.get('CKPT_KEY', 'barlowtwins')}) ep {epoch:03d}/{cfg.epochs} loss={ep_loss:.4f} "
                   f"on_diag={ep_ondiag:.4f} off_diag={ep_offdiag:.4f} "
                   f"off_diag_mean_abs={ep_offdiag_abs:.4f} "
                   f"std={ep_std:.4f} lr_w={lr_w:.2e} lr_b={lr_b:.2e} [{elapsed:.1f}s]")

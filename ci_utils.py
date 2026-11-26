@@ -496,7 +496,7 @@ def run_all_baselines(cfg):
         stop_path = os.path.join(os.path.abspath(cfg.output_dir), "STOP_CURRENT_BASELINE")
         if os.path.exists(stop_path):
             os.remove(stop_path)                                # stale stop request from an earlier baseline
-        print(f"\n{'#'*80}\n  BASELINE: {spec['name']}")
+        print(f"\n{'#'*80}\n  BASELINE: {spec['name']}  ({spec['key']})")
         print(f"  CMD: {' '.join(cmd)}")
         print(f"  To STOP this baseline now (keeps best/last checkpoints + results) and go to the next one:\n"
               f"      touch {stop_path}\n{'#'*80}\n")

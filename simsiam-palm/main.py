@@ -231,7 +231,7 @@ def train_simsiam(cfg, train_loader, eval_dict, out_path):
         elapsed = time.time() - t0
 
         if epoch % 5 == 0 or epoch == cfg.epochs or epoch == 1:
-            print(f" ep {epoch:03d}/{cfg.epochs} loss={ep_loss:.4f} "
+            print(f" ({os.environ.get('CKPT_KEY', 'simsiam')}) ep {epoch:03d}/{cfg.epochs} loss={ep_loss:.4f} "
                   f"sim={ep_sim:.4f} std={ep_std:.4f} [{elapsed:.1f}s]")
             if ep_std < 0.01:
                 print("      !! WARNING: std(z) near 0 -- possible collapse.")

@@ -1002,7 +1002,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                 dim=-1).mean().item()
 
         if epoch % 5 == 0 or epoch == cfg.epochs or epoch == 1:
-            print(f"  ep {epoch:03d}/{cfg.epochs}  "
+            print(f"  ({os.environ.get('CKPT_KEY', cfg.method)}) ep {epoch:03d}/{cfg.epochs}  "
                   f"loss={ep_loss:.4f}  sim={sim:.3f}  "
                   f"var={ep_var:.4f}  lr={lr_now:.2e}  "
                   f"mom={momentum:.4f}  [{elapsed:.1f}s]")
@@ -1278,7 +1278,7 @@ def train_compnet(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
         lr_now = scheduler.get_last_lr()[0]
 
         if epoch % 5 == 0 or epoch == cfg.epochs or epoch == 1:
-            print(f"  ep {epoch:03d}/{cfg.epochs}  CE={ep_loss:.4f}  "
+            print(f"  ({os.environ.get('CKPT_KEY', cfg.method)}) ep {epoch:03d}/{cfg.epochs}  CE={ep_loss:.4f}  "
                   f"train_acc={ep_acc:.2f}%  lr={lr_now:.2e}  [{elapsed:.1f}s]")
 
         if epoch % cfg.eval_every == 0 or epoch == cfg.epochs:
@@ -1425,7 +1425,7 @@ def train_vit_sup(cfg, train_loader, eval_dict, id_map, n_train_ids, train_id_ma
         lr_now = scheduler.get_last_lr()[0]
 
         if epoch % 5 == 0 or epoch == cfg.epochs or epoch == 1:
-            print(f"  ep {epoch:03d}/{cfg.epochs}  CE={ep_loss:.4f}  "
+            print(f"  ({os.environ.get('CKPT_KEY', cfg.method)}) ep {epoch:03d}/{cfg.epochs}  CE={ep_loss:.4f}  "
                   f"train_acc={ep_acc:.2f}%  lr={lr_now:.2e}  [{elapsed:.1f}s]")
 
         if epoch % cfg.eval_every == 0 or epoch == cfg.epochs:

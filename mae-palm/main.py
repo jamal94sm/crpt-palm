@@ -224,7 +224,7 @@ def train_mae(cfg, train_loader, eval_dict, out_path):
         elapsed = time.time() - t0
 
         if epoch % 5 == 0 or epoch == cfg.epochs or epoch == 1:
-            print(f" ep {epoch:03d}/{cfg.epochs} loss={ep_loss:.4f} lr={lr_now:.2e} [{elapsed:.1f}s]")
+            print(f" ({os.environ.get('CKPT_KEY', 'mae')}) ep {epoch:03d}/{cfg.epochs} loss={ep_loss:.4f} lr={lr_now:.2e} [{elapsed:.1f}s]")
 
         if epoch % cfg.eval_every == 0 or epoch == cfg.epochs:
             print(f"\n ── Eval at epoch {epoch} ──")

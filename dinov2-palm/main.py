@@ -344,7 +344,7 @@ def train_dinov2(cfg, train_loader, eval_dict, out_path):
         ep_loss = acc["total"] / n
         ep = epoch + 1
         if ep % 5 == 0 or ep == cfg.epochs or ep == 1:
-            print(f" ep {ep:03d}/{cfg.epochs} loss={ep_loss:.4f} (dino_l={acc['dino_local']/n:.3f} "
+            print(f" ({os.environ.get('CKPT_KEY', 'dinov2')}) ep {ep:03d}/{cfg.epochs} loss={ep_loss:.4f} (dino_l={acc['dino_local']/n:.3f} "
                   f"dino_g={acc['dino_global']/n:.3f} ibot={acc['ibot']/n:.3f} koleo={acc['koleo']/n:.3f}) "
                   f"ent={acc['ent']/n:.2f}/{math.log(out_dim):.2f} lr={lr:.2e} mom={mom:.4f} "
                   f"tT={t_temp:.3f} [{time.time()-t0:.1f}s]" + (f" skipped={n_skipped}" if n_skipped else ""))

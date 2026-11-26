@@ -274,7 +274,7 @@ def train_vicreg(cfg, train_loader, eval_dict, out_path):
         elapsed = __import__("time").time() - t0
 
         if epoch % 5 == 0 or epoch == cfg.epochs or epoch == 1:
-            print(f" ep {epoch:03d}/{cfg.epochs} loss={ep_loss:.4f} "
+            print(f" ({os.environ.get('CKPT_KEY', 'vicreg')}) ep {epoch:03d}/{cfg.epochs} loss={ep_loss:.4f} "
                   f"inv={ep_inv:.4f} var={ep_var:.4f} cov={ep_cov:.4f} "
                   f"[{elapsed:.1f}s]")
 

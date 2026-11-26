@@ -289,7 +289,7 @@ def train_capi(cfg, train_loader, eval_dict, out_path):
         ep_loss = acc["capi"] / n
         ep = epoch + 1
         if ep % 5 == 0 or ep == cfg.epochs or ep == 1:
-            print(f" ep {ep:03d}/{cfg.epochs} capi_loss={ep_loss:.4f} cluster_loss={acc['cluster']/n:.4f} "
+            print(f" ({os.environ.get('CKPT_KEY', 'capi')}) ep {ep:03d}/{cfg.epochs} capi_loss={ep_loss:.4f} cluster_loss={acc['cluster']/n:.4f} "
                   f"tgt_ent={acc['ent']/n:.2f}/{math.log(cfg.num_prototypes):.2f} lr={lr:.2e} mom={momentum:.4f} "
                   f"[{time.time()-t0:.1f}s]")
 

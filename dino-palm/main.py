@@ -282,7 +282,7 @@ def train_dino(cfg, train_loader, eval_dict, out_path):
         epoch_disp = epoch + 1
 
         if epoch_disp % 5 == 0 or epoch_disp == cfg.epochs or epoch_disp == 1:
-            print(f" ep {epoch_disp:03d}/{cfg.epochs} loss={ep_loss:.4f} "
+            print(f" ({os.environ.get('CKPT_KEY', 'dino')}) ep {epoch_disp:03d}/{cfg.epochs} loss={ep_loss:.4f} "
                   f"lr={lr_schedule[global_it]:.2e} mom={momentum_schedule[global_it]:.4f} [{elapsed:.1f}s]")
 
         if epoch_disp % cfg.eval_every == 0 or epoch_disp == cfg.epochs:
