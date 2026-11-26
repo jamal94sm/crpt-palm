@@ -412,7 +412,9 @@ def run_all_baselines(cfg):
 
     selected = getattr(cfg, "baselines", None)
     if selected:
-        specs_to_run = [s for s in BASELINE_SPECS if s["key"] in selected]
+        # run in the order given on the command line (--baselines a b -> a first)
+        _by_key = {s["key"]: s for s in BASELINE_SPECS}
+        specs_to_run = [_by_key[k] for k in dict.fromkeys(selected) if k in _by_key]
         missing = set(selected) - {s["key"] for s in specs_to_run}
         if missing:
             raise SystemExit(f"Unknown --baselines key(s): {missing}. "
