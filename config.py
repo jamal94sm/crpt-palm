@@ -126,6 +126,12 @@ BASELINE_SPECS = [
                "--struct_target", "ridge",
                "--n_targets", "2", "--n_ctx_views", "10", "--ctx_view_mode", "both",
                "--use_koleo", "1", "--koleo_weight", "0.1"]},
+    # ─── Palm-JEPA with the view budget of DINOv2: 2 crops x 5 (context, target) pairs = 10 context views ───
+    {"key": "palmjepa_comparable_dinov2", "name": "Palm-JEPA_comparableDINOv2", "script": "self",
+     "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "all",
+               "--gabor_gray", "0",
+               "--struct_mode", "a2", "--struct_loss", "infonce", "--w_a2", "0.3",
+               "--view_protocol", "dinov2", "--n_pairs_per_crop", "5", "--num_blocks", "1"]},
     # ─── corruption-type ablation: Palm-JEPA with a different corruption group (the photometric type = the old Palm-JEPA default) ───
     {"key": "palmjepa_c_lighting", "name": "Palm-JEPA (Lighting corruption)", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "lighting",
@@ -390,6 +396,16 @@ def get_cfg(args=None):
                    help="Context views per image (JEPA / Palm-JEPA only). Each view gets its own context mask "
                         "and its own random corruption; all views share the target blocks and the single "
                         "teacher pass; losses are averaged over views. 1 = standard (unchanged) training.")
+    p.add_argument("--view_protocol", default="standard", choices=["standard", "dinov2"],
+                   help="standard = the usual JEPA view setup (default, unchanged). dinov2 = view budget matched "
+                        "to DINOv2 (Palm-JEPA_comparableDINOv2): every image gives 2 augmented crops of the same "
+                        "size (2 teacher passes, like DINOv2's 2 global crops); on each crop --n_pairs_per_crop "
+                        "independent (context, target) pairs are sampled (--num_blocks target blocks per pair) "
+                        "-> 2 x n_pairs_per_crop context views per image; each context gets its own corruption "
+                        "and predicts ONLY its own paired target(s). Needs --n_ctx_views 1 and --n_targets 1.")
+    p.add_argument("--n_pairs_per_crop", type=int, default=5,
+                   help="--view_protocol dinov2 only: (context, target) pairs per crop. Context views per "
+                        "image = 2 x this (5 -> 10, the DINOv2 2 global + 8 local view count).")
     p.add_argument("--trg_ratio", type=float, nargs=2,
                    default=[0.10, 0.15])
     p.add_argument("--ctx_ratio", type=float, nargs=2,

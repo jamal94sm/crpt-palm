@@ -251,8 +251,11 @@ class CASIADataset(Dataset):
     """CASIA-MS dataset with optional augmentation multiplier."""
 
     def __init__(self, samples, id_map, img_size=112, augment=False,
-                 aug_multiplier=1):
+                 aug_multiplier=1, n_crops=1):
         self.samples = samples
+        # n_crops > 1 (--view_protocol dinov2): __getitem__ returns n_crops independent
+        # augmentations of the same image, stacked as (n_crops, C, H, W).
+        self.n_crops = n_crops if augment else 1
         self.id_map = id_map
         self.augment = augment
         self.aug_multiplier = aug_multiplier if augment else 1
@@ -286,7 +289,10 @@ class CASIADataset(Dataset):
         real_idx = idx % len(self.samples)
         s = self.samples[real_idx]
         img = Image.open(s["path"]).convert("RGB")
-        img = self.transform(img)
+        if self.n_crops > 1:
+            img = torch.stack([self.transform(img) for _ in range(self.n_crops)])
+        else:
+            img = self.transform(img)
         label = -1 if s.get("unlabeled") else self.id_map[s["identity"]]
         return img, label
 
@@ -655,7 +661,8 @@ def build_datasets_cross_dataset(cfg):
           f"Training IDs: {n_train_ids}")
 
     train_ds = CASIADataset(train_samples, train_id_map, cfg.img_size,
-                            augment=True, aug_multiplier=cfg.aug_multiplier)
+                            augment=True, aug_multiplier=cfg.aug_multiplier,
+                            n_crops=2 if getattr(cfg, "view_protocol", "standard") == "dinov2" else 1)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,
                               num_workers=cfg.num_workers, drop_last=True,
                               pin_memory=True)
@@ -755,7 +762,8 @@ def build_datasets(cfg):
 
     # Training set uses the TRAINING id map (so CE labels are 0..n_train_ids-1).
     train_ds = CASIADataset(train_samples, train_id_map, cfg.img_size,
-                            augment=True, aug_multiplier=cfg.aug_multiplier)
+                            augment=True, aug_multiplier=cfg.aug_multiplier,
+                            n_crops=2 if getattr(cfg, "view_protocol", "standard") == "dinov2" else 1)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, num_workers=cfg.num_workers,
                               drop_last=True, pin_memory=True)

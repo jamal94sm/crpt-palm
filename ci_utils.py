@@ -157,7 +157,8 @@ def run_multi_seed(cfg, train_fns, out_path):
 _OVERRIDE_FLAGS = [("--n_targets", "n_targets"), ("--num_blocks", "num_blocks"),
                    ("--n_ctx_views", "n_ctx_views"), ("--n_contexts", "n_ctx_views"),
                    ("--ctx_view_mode", "ctx_view_mode"), ("--target_aug_strength", "target_aug_strength"),
-                   ("--corruption_type", "corruption_type"), ("--corruption_severity", "corruption_severity")]
+                   ("--corruption_type", "corruption_type"), ("--corruption_severity", "corruption_severity"),
+                   ("--n_pairs_per_crop", "n_pairs_per_crop")]
 
 
 def _cli_overrides(cfg):

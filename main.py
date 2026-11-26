@@ -47,6 +47,11 @@ baseline exactly):
                         each with its own --num_blocks target blocks, and N
                         context views (= --n_ctx_views); every context view
                         predicts every target block -> M x num_blocks x N, loss averaged.
+  --view_protocol dinov2 : Palm-JEPA_comparableDINOv2. View budget matched to DINOv2:
+                        each image -> 2 augmented crops (same size, 2 teacher passes);
+                        on each crop --n_pairs_per_crop P (default 5) independent
+                        (context, target) pairs -> 2P context views per image, each with
+                        its own corruption, each predicting only its OWN paired target.
   --target_aug_strength a : (default 0) each target view gets its own mild
                         photometric jitter of the teacher input (DINOv2-style
                         teacher views); 0 = clean teacher, one shared pass.
@@ -525,13 +530,29 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
               + ("with the SAME corruption draw as the context" if _corrupt_target == 2 else
                  "with its OWN independent draw (same type/probability as the context)")
               + "; the structural target stays computed from the clean image")
+    # ─── --view_protocol dinov2 (Palm-JEPA_comparableDINOv2) ───
+    use_dv2 = getattr(cfg, "view_protocol", "standard") == "dinov2"
+    n_pairs = int(getattr(cfg, "n_pairs_per_crop", 5) or 5) if use_dv2 else 1
+    if use_dv2:
+        if n_pairs < 1:
+            raise SystemExit("--n_pairs_per_crop must be >= 1")
+        bad = [n for n, on in (("--n_ctx_views > 1", n_views > 1), ("--n_targets > 1", n_targets > 1),
+                               ("--target_aug_strength > 0", _tag > 0), ("--corrupt_target", bool(_corrupt_target)),
+                               ("DMT-JEPA", use_dmtjepa)) if on]
+        if bad:
+            raise SystemExit(f"--view_protocol dinov2 cannot be combined with: {', '.join(bad)}")
+        print(f"  View protocol: DINOv2-comparable -- 2 crops/image (2 teacher passes) x {n_pairs} "
+              f"(context, target) pairs per crop = {2 * n_pairs} context views/image; "
+              f"{cfg.num_blocks} target block(s) per pair; each context predicts only its own target(s)")
+    n_grp = n_pairs if use_dv2 else n_views     # groups for the per-view InfoNCE / KoLeo
     use_koleo = bool(getattr(cfg, "use_koleo", 0)) and cfg.koleo_weight > 0
     if use_koleo:
         print(f"  KoLeo: ON  weight={cfg.koleo_weight}  (pooled context features, per view)")
-    print(f"  Targets x contexts: M={n_targets} target views x {cfg.num_blocks} blocks = {n_tb} target blocks; "
-          f"N={n_views} context views -> {n_tb * n_views} (context, target-block) pairs per image, "
-          f"loss averaged over pairs"
-          + (f"; teacher jitter {_tag}" if _tag > 0 else "; clean teacher"))
+    if not use_dv2:
+        print(f"  Targets x contexts: M={n_targets} target views x {cfg.num_blocks} blocks = {n_tb} target blocks; "
+              f"N={n_views} context views -> {n_tb * n_views} (context, target-block) pairs per image, "
+              f"loss averaged over pairs"
+              + (f"; teacher jitter {_tag}" if _tag > 0 else "; clean teacher"))
     print(f"  Corruption: {'ON' if getattr(cfg, 'use_corruption', 0) else 'OFF'}"
           f"  Structural: {'ON' if use_struct else 'OFF'}"
           f"  Supervision: {'ON' if use_sup else 'OFF'}"
@@ -638,6 +659,15 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
         for images, labels in train_loader:
             images = images.to(cfg.device)
             labels = labels.to(cfg.device)
+            n_crop_rows = None
+            if use_dv2:
+                # (B, 2, C, H, W) -> crops (2B) crop-major -> repeated n_pairs times (pair-major):
+                # row p*2B + c*B + i = pair p on crop c of image i; every row gets its own masks.
+                images = images.transpose(0, 1).reshape(-1, *images.shape[2:])
+                labels = labels.repeat(2)
+                n_crop_rows = images.size(0)
+                images = images.repeat(n_pairs, 1, 1, 1)
+                labels = labels.repeat(n_pairs)
             B = images.size(0)
 
             # Raw Gabor responses of the CLEAN image (reused by the A2
@@ -647,7 +677,10 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
             first_batch = (epoch == 1 and n_bat == 0)
             with torch.no_grad():
                 if gabor_bank is not None:
-                    gabor_resp = gabor_bank(images)
+                    if use_dv2:     # Gabor of each crop once, shared by its n_pairs rows
+                        gabor_resp = gabor_bank(images[:n_crop_rows]).repeat(n_pairs, 1, 1, 1)
+                    else:
+                        gabor_resp = gabor_bank(images)
                 if use_line_mask and sal_mode == "ridge":
                     if first_batch:
                         saliency, sal_lines = ridge_saliency(
@@ -722,7 +755,10 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                     tgt_in = corrupt_images(images, cfg, CASIA_MEAN, CASIA_STD)
                 else:
                     tgt_in = images
-                tgt_full = target_encoder(tgt_in)
+                if use_dv2:     # one teacher pass per crop (2 per image, like DINOv2), reused by its pairs
+                    tgt_full = target_encoder(tgt_in[:n_crop_rows]).repeat(n_pairs, 1, 1)
+                else:
+                    tgt_full = target_encoder(tgt_in)
                 if n_views > 1:
                     tgt_full = tgt_full.repeat(n_views, 1, 1)          # one teacher pass, reused by every view
                 if use_dmtjepa:
@@ -811,7 +847,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                             f"A1 misalignment: t_a1 {tuple(t_a1.shape)} vs "
                             f"ctx_embeds {tuple(ctx_embeds.shape)}")
                     l_a1, s_a1 = _per_view_structure_loss(
-                        struct_head(ctx_embeds), t_a1, n_views, 1,
+                        struct_head(ctx_embeds), t_a1, n_grp, 1,
                         kind=cfg.loss_a1,
                         temperature=cfg.infonce_temp,
                         max_n=cfg.infonce_max_n)
@@ -829,7 +865,7 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
                             f"A2 misalignment: t_a2 {tuple(t_a2.shape)} vs "
                             f"struct_hidden {tuple(struct_hidden.shape)}")
                     l_a2, s_a2 = _per_view_structure_loss(
-                        struct_head_a2(struct_hidden), t_a2, n_views, n_tb,
+                        struct_head_a2(struct_hidden), t_a2, n_grp, n_tb,
                         kind=cfg.loss_a2,
                         temperature=cfg.infonce_temp,
                         max_n=cfg.infonce_max_n)
@@ -902,12 +938,12 @@ def train_jepa(cfg, train_loader, eval_dict, id_map, n_classes, out_path):
 
             # ─── KoLeo (--use_koleo 1): spread the pooled context features, computed PER context view ───
             if use_koleo:
-                zk = ctx_embeds.mean(dim=1).reshape(n_views, B, -1)     # (views, B, D), view-major rows
-                ks = [koleo_loss(zk[v]) for v in range(n_views)]
+                zk = ctx_embeds.mean(dim=1).reshape(n_grp, -1, ctx_embeds.size(-1))  # (views, B, D), view-major
+                ks = [koleo_loss(zk[v]) for v in range(n_grp)]
                 l_koleo = torch.stack([k[0] for k in ks]).mean()
                 loss = loss + cfg.koleo_weight * l_koleo
                 ep_koleo += l_koleo.item()
-                ep_koleo_d += sum(k[1] for k in ks) / n_views
+                ep_koleo_d += sum(k[1] for k in ks) / n_grp
                 n_koleo += 1
 
             # ─── Gradient-conflict diagnostic on shared params ───
@@ -1505,6 +1541,8 @@ def _print_footer(cfg, best_eval):
 
 def main():
     cfg = get_cfg()
+    if getattr(cfg, "view_protocol", "standard") == "dinov2" and cfg.method != "jepa":
+        raise SystemExit("--view_protocol dinov2 is only implemented for --method jepa")
     set_seed(cfg.seed)
     os.makedirs(cfg.output_dir, exist_ok=True)
 
