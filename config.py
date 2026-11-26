@@ -80,7 +80,7 @@ BASELINE_SPECS = [
      "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "all",
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
-               "--w_a2", "0.1"]},
+               "--w_a2", "0.3"]},
     # ─── structural-target ablation: Palm-JEPA with the Gabor target replaced ───
     {"key": "palmjepa_sobel", "name": "Palm-JEPA (Sobel target)", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "all",
@@ -96,7 +96,7 @@ BASELINE_SPECS = [
      "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "all",
                "--gabor_gray", "0",
                "--struct_mode", "a2", "--struct_loss", "infonce",
-               "--w_a2", "0.1", "--struct_target", "ridge"]},
+               "--w_a2", "0.3", "--struct_target", "ridge"]},
     {"key": "palmjepa_lbp", "name": "Palm-JEPA (LBP target)", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "all",
                "--gabor_gray", "0",
