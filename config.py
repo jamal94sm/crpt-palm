@@ -122,7 +122,7 @@ BASELINE_SPECS = [
     {"key": "palmjepa_ridge_mv_koleo", "name": "Palm-JEPA multi-view (Hessian ridge target) + KoLeo", "script": "self",
      "extra": ["--method", "jepa", "--use_corruption", "1", "--corruption_type", "all",
                "--gabor_gray", "0",
-               "--struct_mode", "a2", "--struct_loss", "infonce", "--w_a2", "0.1",
+               "--struct_mode", "a2", "--struct_loss", "infonce", "--w_a2", "0.3",
                "--struct_target", "ridge",
                "--n_targets", "2", "--n_ctx_views", "10", "--ctx_view_mode", "both",
                "--use_koleo", "1", "--koleo_weight", "0.1"]},
